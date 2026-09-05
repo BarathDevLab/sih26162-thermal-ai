@@ -1,0 +1,110 @@
+{
+  "schema_version": "1.0",
+  "status": "FROZEN",
+  "source": "Validated v1.1 Section 11, verified across all A/B/C combinations",
+  "severity_order": [
+    "NONE",
+    "INFO",
+    "LOW",
+    "MEDIUM",
+    "HIGH",
+    "CRITICAL"
+  ],
+  "rules": [
+    {
+      "alert_type": "CRITICAL_INDUSTRIAL_ANOMALY",
+      "severity": "CRITICAL",
+      "condition": "A=INDUSTRIAL AND C=CRITICAL",
+      "evidence_required": true,
+      "meaning": "High-confidence industrial source with extreme site-relative anomaly."
+    },
+    {
+      "alert_type": "HIGH_INDUSTRIAL_ANOMALY",
+      "severity": "HIGH",
+      "condition": "A=INDUSTRIAL AND C=ANOMALOUS",
+      "evidence_required": true,
+      "meaning": "Industrial source with strong abnormal behavior."
+    },
+    {
+      "alert_type": "INDUSTRIAL_REACTIVATION_ANOMALY",
+      "severity": "HIGH",
+      "condition": "A=INDUSTRIAL AND B=REACTIVATED AND C in {ELEVATED,ANOMALOUS}",
+      "evidence_required": true,
+      "meaning": "Industrial source returned after dormancy and is thermally unusual."
+    },
+    {
+      "alert_type": "UNKNOWN_CRITICAL_REVIEW",
+      "severity": "HIGH",
+      "condition": "A=UNKNOWN AND C=CRITICAL",
+      "evidence_required": true,
+      "meaning": "Urgent analyst classification; do not call industrial."
+    },
+    {
+      "alert_type": "UNKNOWN_ANOMALY_REVIEW",
+      "severity": "MEDIUM",
+      "condition": "A=UNKNOWN AND C in {ELEVATED,ANOMALOUS}",
+      "evidence_required": true,
+      "meaning": "Unclassified source with abnormal behavior."
+    },
+    {
+      "alert_type": "INDUSTRIAL_ELEVATION",
+      "severity": "MEDIUM",
+      "condition": "A=INDUSTRIAL AND C=ELEVATED",
+      "evidence_required": false,
+      "meaning": "Moderate abnormality requiring watch/evidence review."
+    },
+    {
+      "alert_type": "NEW_SOURCE_REVIEW",
+      "severity": "MEDIUM",
+      "condition": "B=NEW AND A in {UNKNOWN,INDUSTRIAL} AND C=INSUFFICIENT_HISTORY",
+      "evidence_required": true,
+      "meaning": "New thermal source; anomaly baseline unavailable."
+    },
+    {
+      "alert_type": "NORMAL_INDUSTRIAL_OPERATION",
+      "severity": "INFO",
+      "condition": "A=INDUSTRIAL AND C=NORMAL",
+      "evidence_required": false,
+      "meaning": "Industrial source within learned thermal behavior."
+    },
+    {
+      "alert_type": "NONINDUSTRIAL_ACTIVITY",
+      "severity": "LOW",
+      "condition": "A=NONINDUSTRIAL",
+      "evidence_required": false,
+      "meaning": "Retain B/C information; do not frame as industrial incident."
+    },
+    {
+      "alert_type": "NO_ALERT",
+      "severity": "NONE",
+      "condition": "default/no recent qualifying rule",
+      "evidence_required": false,
+      "meaning": "Normal background or no recent event."
+    }
+  ],
+  "dedupe": {
+    "fingerprint_components": [
+      "site_id",
+      "site_day",
+      "alert_type",
+      "model_stack_version"
+    ],
+    "same_day_escalation": "update/escalate existing incident instead of creating unrelated alerts"
+  },
+  "output_fields": [
+    "site_id",
+    "site_day",
+    "alert_level",
+    "alert_type",
+    "headline",
+    "reason_codes",
+    "evidence_required",
+    "is_escalation",
+    "previous_alert_type",
+    "previous_alert_level",
+    "created_at",
+    "updated_at",
+    "model_stack_version",
+    "alert_fingerprint"
+  ]
+}
