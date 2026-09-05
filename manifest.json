@@ -1,0 +1,167 @@
+{
+  "package": "SIH26162_Agent_Native_Implementation_Pack",
+  "version": "1.0",
+  "source_document": "SIH26162_Complete_Technical_Implementation_Documentation_v1.1_VALIDATED.docx",
+  "files": [
+    {
+      "path": "AGENTS.md",
+      "sha256": "c4f6f129853bb87bc1bcb0b756de0ab9e821daea262372dd35c6c17172cf8461",
+      "bytes": 246
+    },
+    {
+      "path": "CLAUDE.md",
+      "sha256": "32a94158f3eec3d74e670a5a5be0b64944508fd798f5002e555e866f80d23541",
+      "bytes": 5760
+    },
+    {
+      "path": "README.md",
+      "sha256": "b4ffd29711ca897490616b1c8b7c50bd9b1ee654c750daa63a83f7d0df901755",
+      "bytes": 616
+    },
+    {
+      "path": "backend/.env.example",
+      "sha256": "c2cf1a0b453656922a6cbb49a5142a9b2020a43c27258b75e60b31c55c3f0964",
+      "bytes": 471
+    },
+    {
+      "path": "backend/config/decision_engine_draft.json",
+      "sha256": "3df9dee076320c0ff15d4db6958eb8ec1b04c3fed8d3f499f886455e28d0bde5",
+      "bytes": 3011
+    },
+    {
+      "path": "backend/config/frozen_thresholds.json",
+      "sha256": "0488488f3bab5b72af6c89e34e10ce4e33070bfe128874c2c7c8419f23794bc4",
+      "bytes": 1990
+    },
+    {
+      "path": "backend/config/model_a_features.json",
+      "sha256": "f0154f4168b4fe07d2c074cf8d32ed95c6570b0d2e035088f04f9007323c188e",
+      "bytes": 2376
+    },
+    {
+      "path": "backend/config/model_b.json",
+      "sha256": "5be6a146db197f2cf44655ae544bfd638c3d150c2d96252e2f9064f77fb0f6d7",
+      "bytes": 1761
+    },
+    {
+      "path": "backend/config/model_c.json",
+      "sha256": "607b382df23d2dd43597c2122ac7132499739072784f273608991fc6d0e5b93a",
+      "bytes": 2343
+    },
+    {
+      "path": "backend/config/model_stack.json",
+      "sha256": "865083f9da3c40ca7f79de4692b48b214b9ebc3b129dc298e0f4fae11c33b818",
+      "bytes": 2495
+    },
+    {
+      "path": "docs/00_overview.md",
+      "sha256": "b10250a7c69ea3578a105a873f2e161692b4bb09a1a388ab64c63bff5a14325f",
+      "bytes": 13329
+    },
+    {
+      "path": "docs/01_data_and_ground_truth.md",
+      "sha256": "2a5572563ec9aec9c3c2684a433e0d6cf3af00af8dc48599db3a73c3bc48ae32",
+      "bytes": 6644
+    },
+    {
+      "path": "docs/02_model_a.md",
+      "sha256": "7f74ccefcf9c307b0bb517f7626940a5a9f577b10f3e71497b21aad2bb0b18f6",
+      "bytes": 10090
+    },
+    {
+      "path": "docs/03_model_b.md",
+      "sha256": "6031bac6f3b933a3fbfe9b3f3628d0a3344e116cdeae8c52f01f4c1f5c641631",
+      "bytes": 5233
+    },
+    {
+      "path": "docs/04_model_c.md",
+      "sha256": "3bad51ddc70e6f16322d1685707e6e7d50a7e1605a5b8193e95794f48512882d",
+      "bytes": 9803
+    },
+    {
+      "path": "docs/05_validation_claims.md",
+      "sha256": "74723d4a5056d8bb72d931dfe980213ce0cc632424477e34c289134f52d99983",
+      "bytes": 2346
+    },
+    {
+      "path": "docs/06_decision_engine.md",
+      "sha256": "98b222987feb1b360ad4a43a20423767b488b96d6cb3bf6543150eac3a3141dc",
+      "bytes": 3957
+    },
+    {
+      "path": "docs/07_firms_integration.md",
+      "sha256": "6846c32c731d712c52c82a601f3ca5506fac35aaf411e849f075cd7f9ed57cea",
+      "bytes": 8938
+    },
+    {
+      "path": "docs/08_backend_and_db.md",
+      "sha256": "639ca8cc5ed4f444cc5fdb5a89b62c761f73f485cf4365dbf531c785dde8efd7",
+      "bytes": 11505
+    },
+    {
+      "path": "docs/09_frontend.md",
+      "sha256": "33b6b16d65c412cf257601f82860745a5e0771f6694cf22c30386576681f7006",
+      "bytes": 2752
+    },
+    {
+      "path": "docs/10_deployment_ops.md",
+      "sha256": "0f26425a068cdfe2415913d185c1e8b71040524c42d1c004f2d92423df77ea77",
+      "bytes": 6510
+    },
+    {
+      "path": "docs/11_testing_roadmap.md",
+      "sha256": "c05631a65986107c5f8839e39476fe81f377d5d40e3a0eeb7e158a3a4e059302",
+      "bytes": 5686
+    },
+    {
+      "path": "docs/12_risks.md",
+      "sha256": "89f07c0162f95d20f66f67270963cf0c1447ca7721f6ca26db81133a0a49320d",
+      "bytes": 2558
+    },
+    {
+      "path": "docs/13_artifacts_env_contract.md",
+      "sha256": "bcd8eb52fd52a2e7d495184c914d8fc82286cad7dbbe2e4ae0dac21bfd638c0f",
+      "bytes": 8784
+    },
+    {
+      "path": "docs/14_references.md",
+      "sha256": "0cdd26413417c5c426a98f66750ac7c59ade6c7d755ec03fff61df43846159a4",
+      "bytes": 2225
+    },
+    {
+      "path": "docs/99_full_validated_source.md",
+      "sha256": "17488b628906237ee4f9f13e49552275a0c41dc3c2bda4bf07a533340d10e201",
+      "bytes": 102263
+    },
+    {
+      "path": "docs/README.md",
+      "sha256": "f3b456dee7608dca80739a504dbf6f8f389610003dada88f7c1fa413ab5dd3a6",
+      "bytes": 1488
+    },
+    {
+      "path": "docs/assets/architecture.png",
+      "sha256": "706f5b6d314b938006a013c1bbfd5aaa66b59d17947699a7b7228ca3553687b9",
+      "bytes": 140936
+    },
+    {
+      "path": "docs/assets/live_flow.png",
+      "sha256": "d277d830d00fba2c56727a1c26ffafe6d617bba38506d4320f304aa8bb94b7be",
+      "bytes": 174076
+    },
+    {
+      "path": "docs/assets/model_a.png",
+      "sha256": "f2b368cc54f0bdf5e4e8cbc38bc2b67fb48f2b7ac12b3b2147346dad175aca7c",
+      "bytes": 140600
+    },
+    {
+      "path": "docs/assets/model_b.png",
+      "sha256": "a0d8f958eac8bdaf5653ebb96594cfce6fc3896a135afa995e776094ab3b4930",
+      "bytes": 153721
+    },
+    {
+      "path": "docs/assets/model_c.png",
+      "sha256": "d4cf5384df997fd4e9a7604767bc72004815f80d35074fff380afda4e2af101f",
+      "bytes": 201719
+    }
+  ]
+}

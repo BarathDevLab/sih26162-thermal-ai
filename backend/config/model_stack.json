@@ -1,0 +1,73 @@
+{
+  "schema_version": "1.0",
+  "recommended_stack_version": "2026-09-04-r1",
+  "status": "logic_frozen_runtime_artifacts_must_be_verified",
+  "artifacts": [
+    {
+      "component": "A_CORE",
+      "drive_path": "model_a_final/models/MODEL_A_FINAL.joblib",
+      "repo_path": "backend/models/MODEL_A_FINAL.joblib",
+      "required": true,
+      "action": "verify_presence_and_sha256"
+    },
+    {
+      "component": "A_PRITHVI_HEAD",
+      "drive_path": "model_a_final/models/MODEL_A_PRITHVI_FINAL.joblib",
+      "repo_path": "backend/models/MODEL_A_PRITHVI_FINAL.joblib",
+      "required": false,
+      "action": "verify_or_generate_from_freeze_cell_then_sha256"
+    },
+    {
+      "component": "A_CORE_CONFIG",
+      "drive_path": "model_a_final/audit/model_a_final_config.json",
+      "repo_path": "backend/config/source/model_a_final_config.json",
+      "required": true,
+      "action": "verify_presence_and_sha256"
+    },
+    {
+      "component": "A_PRITHVI_CONFIG",
+      "drive_path": "model_a_prithvi/results/prithvi_final_config.json",
+      "repo_path": "backend/config/source/prithvi_final_config.json",
+      "required": false,
+      "action": "verify_or_generate_then_sha256"
+    },
+    {
+      "component": "B_HISTORY",
+      "drive_path": "model_b/built/site_daily_activity.parquet",
+      "repo_path": "data/bootstrap/site_daily_activity.parquet",
+      "required": true,
+      "action": "verify_presence"
+    },
+    {
+      "component": "B_SNAPSHOT",
+      "drive_path": "model_b/built/MODEL_B_SOURCE_STATES_FINAL.csv",
+      "repo_path": "data/bootstrap/MODEL_B_SOURCE_STATES_FINAL.csv",
+      "required": true,
+      "action": "verify_presence"
+    },
+    {
+      "component": "C_CALIBRATION",
+      "drive_path": "model_c/models/MODEL_C_V3_FROZEN.joblib",
+      "repo_path": "backend/models/MODEL_C_V3_FROZEN.joblib",
+      "required": true,
+      "action": "verify_or_generate_from_freeze_cell_then_sha256"
+    },
+    {
+      "component": "C_REPLAY",
+      "drive_path": "model_c/built/MODEL_C_EVENT_REPLAY_V3.parquet",
+      "repo_path": "data/bootstrap/MODEL_C_EVENT_REPLAY_V3.parquet",
+      "required": true,
+      "action": "verify_presence"
+    }
+  ],
+  "foundation_model": {
+    "repo": "ibm-nasa-geospatial/Prithvi-EO-2.0-300M",
+    "files": [
+      "Prithvi_EO_V2_300M.pt",
+      "config.json",
+      "prithvi_mae.py"
+    ],
+    "pin_revision": true
+  },
+  "deployment_gate": "Do not start live 2026 mode from the frozen 2025 B/C snapshot. Backfill 2026 first."
+}

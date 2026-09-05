@@ -1,0 +1,82 @@
+{
+  "schema_version": "1.0",
+  "source": "Validated v1.1 Appendix B and frozen model sections",
+  "source_resolver": {
+    "method": "DBSCAN-derived site definition",
+    "metric": "haversine",
+    "eps_m": 750,
+    "min_samples": 3,
+    "frozen": true
+  },
+  "model_a": {
+    "low": 0.405,
+    "core": 0.885,
+    "strong": 0.975,
+    "prithvi_strong_rescue": 0.965,
+    "guarded_logic": [
+      {
+        "if": "a_core >= 0.975",
+        "decision": "INDUSTRIAL_CORE_STRONG"
+      },
+      {
+        "if": "0.885 <= a_core < 0.975",
+        "decision": "INDUSTRIAL_CORE_POSITIVE"
+      },
+      {
+        "if": "0.405 <= a_core < 0.885 and HLS available and prithvi >= 0.965",
+        "decision": "INDUSTRIAL_PRITHVI_RESCUE"
+      },
+      {
+        "if": "0.405 <= a_core < 0.885 and rescue condition not satisfied",
+        "decision": "UNKNOWN"
+      },
+      {
+        "if": "a_core < 0.405",
+        "decision": "NONINDUSTRIAL"
+      }
+    ],
+    "policy": "Prithvi may rescue A-Core uncertainty only and may never veto A-Core >= 0.885."
+  },
+  "model_b": {
+    "recent_days": 30,
+    "dormant_days": 90,
+    "reactivation_gap_days": 90,
+    "persistent_lifetime_days": 90,
+    "persistent_active_months_180": 3,
+    "persistent_active_days_180": 6,
+    "precedence": [
+      "REACTIVATED",
+      "NEW",
+      "PERSISTENT",
+      "DORMANT",
+      "INTERMITTENT"
+    ]
+  },
+  "model_c": {
+    "min_active_history": 5,
+    "min_span_days": 30,
+    "min_gap_history": 3,
+    "ewma_alpha": 0.35,
+    "cusum_k": 2.0,
+    "cusum_cap": 50.0,
+    "change_reset_gap_days": 30,
+    "z_cap": 20.0,
+    "severity": {
+      "normal": {
+        "lt": 0.95
+      },
+      "elevated": {
+        "gte": 0.95,
+        "lt": 0.99
+      },
+      "anomalous": {
+        "gte": 0.99,
+        "lt": 0.999
+      },
+      "critical": {
+        "gte": 0.999
+      }
+    },
+    "score": "empirical midrank group percentiles -> mean of two strongest available groups -> final empirical midrank percentile"
+  }
+}

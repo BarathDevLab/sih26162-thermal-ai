@@ -1,0 +1,65 @@
+{
+  "schema_version": "1.0",
+  "engine": "deterministic_temporal_state",
+  "frozen": true,
+  "as_of_date_rule": "Use latest ingested observation date for batch or current operational date for live mode.",
+  "precedence": [
+    "REACTIVATED",
+    "NEW",
+    "PERSISTENT",
+    "DORMANT",
+    "INTERMITTENT"
+  ],
+  "states": {
+    "REACTIVATED": {
+      "condition": "days_since_last <= 30 AND historical source AND last_long_gap_days >= 90 AND reactivation_age_days <= 30"
+    },
+    "NEW": {
+      "condition": "days_since_last <= 30 AND days_since_first <= 30"
+    },
+    "PERSISTENT": {
+      "condition": "days_since_last <= 30 AND lifetime_days >= 90 AND active_months_180 >= 3 AND active_days_180 >= 6"
+    },
+    "DORMANT": {
+      "condition": "days_since_last > 90"
+    },
+    "INTERMITTENT": {
+      "condition": "default when no higher-precedence state matches"
+    }
+  },
+  "confidence": {
+    "NEW": {
+      "LOW": "active_days_30 == 1",
+      "MEDIUM": "typically 2 recent active days",
+      "HIGH": "active_days_30 >= 3"
+    },
+    "REACTIVATED": {
+      "LOW": "active_days_30 == 1",
+      "MEDIUM": "active_days_30 >= 2 unless HIGH",
+      "HIGH": "active_days_30 >= 3 AND last_long_gap_days >= 180"
+    },
+    "PERSISTENT": {
+      "MEDIUM": "default",
+      "HIGH": "active_months_180 >= 4 AND active_days_180 >= 12"
+    },
+    "DORMANT": {
+      "MEDIUM": "91-179 days since last detection",
+      "HIGH": "days_since_last >= 180"
+    },
+    "INTERMITTENT": {
+      "MEDIUM": "all cases"
+    }
+  },
+  "frozen_2025_counts": {
+    "DORMANT": 61890,
+    "INTERMITTENT": 10399,
+    "REACTIVATED": 5047,
+    "NEW": 1551,
+    "PERSISTENT": 478
+  },
+  "frozen_2025_confidence_counts": {
+    "HIGH": 62753,
+    "MEDIUM": 13231,
+    "LOW": 3381
+  }
+}

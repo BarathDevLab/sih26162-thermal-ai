@@ -1,0 +1,71 @@
+{
+  "schema_version": "1.0",
+  "version": "V3",
+  "engine": "site_specific_unsupervised_statistical_time_series_anomaly",
+  "frozen": true,
+  "cold_start": {
+    "min_prior_active_days": 5,
+    "min_history_span_days": 30,
+    "min_recurrence_gaps": 3,
+    "output": "INSUFFICIENT_HISTORY"
+  },
+  "robust_baseline": {
+    "location": "median(history)",
+    "scale": "1.4826 * median(abs(x - median))",
+    "fallback_scale": "IQR / 1.349",
+    "scale_floor": "max(scale, 0.05*abs(median), 1e-3)"
+  },
+  "parameters": {
+    "ewma_alpha": 0.35,
+    "cusum_k": 2.0,
+    "cusum_cap": 50.0,
+    "change_reset_gap_days": 30,
+    "z_cap": 20.0
+  },
+  "groups": {
+    "intensity": {
+      "raw": "max(z_max_frp, z_mean_frp)",
+      "direction": "positive escalation only"
+    },
+    "density": {
+      "raw": "robust z of log1p(detections/day)",
+      "direction": "unexpectedly high only"
+    },
+    "recurrence_burst": {
+      "raw": "max(0, (historical_median_gap-current_gap)/robust_gap_scale)",
+      "direction": "unexpectedly short gaps only; long gaps belong to Model B"
+    },
+    "change": {
+      "raw": "max(EWMA, bounded CUSUM)",
+      "direction": "sustained escalation; reset after >30 day gap"
+    }
+  },
+  "calibration": [
+    "Convert each group to empirical midrank percentile using earlier calibration replay",
+    "Take two strongest available group percentiles and average",
+    "Calibrate top-two composite again to final empirical midrank percentile"
+  ],
+  "severity": {
+    "NORMAL": "score < 0.950",
+    "ELEVATED": "0.950 <= score < 0.990",
+    "ANOMALOUS": "0.990 <= score < 0.999",
+    "CRITICAL": "score >= 0.999",
+    "INSUFFICIENT_HISTORY": "cold start"
+  },
+  "operational_presentation": {
+    "NO_RECENT_EVENT": "site has no detection within 30 days; not an anomaly class"
+  },
+  "isolation_forest_role": "ablation and secondary ranking audit only; never overrides V3 production score",
+  "validation": {
+    "recent_sites_2025": 9010,
+    "recent_scoreable_2025": 2267,
+    "recent_scoreable_fraction": 0.252,
+    "spearman_with_isolation_forest": 0.9507,
+    "top_1pct_overlap": {
+      "count": 382,
+      "denominator": 614,
+      "fraction": 0.622
+    }
+  },
+  "claim_guard": "Do not report supervised accuracy/precision/recall or industrial-fire detection rate until independent anomaly ground truth exists."
+}
