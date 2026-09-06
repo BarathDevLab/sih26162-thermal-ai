@@ -3,9 +3,9 @@ import {
   ChevronDown,
   ChevronUp,
   Crosshair,
-  Check,
-  Radio
+  Check
 } from 'lucide-react';
+import { DecisionEngineIcon } from './Icons';
 import type { AlertItem } from '../types/api';
 import { acknowledgeAlert } from '../services/api';
 
@@ -39,23 +39,23 @@ export const AlertRail: React.FC<AlertRailProps> = ({
   const criticalCount = alerts.filter(a => a.alert_level === 'CRITICAL').length;
 
   return (
-    <div className="absolute bottom-4 left-76 z-20 w-96 max-w-[calc(100vw-340px)] shadow-2xl transition-all">
+    <div className="absolute bottom-4 left-84 z-20 w-[410px] max-w-[calc(100vw-360px)] shadow-2xl transition-all select-none">
       {/* Header Bar */}
       <div
         onClick={() => setCollapsed(!collapsed)}
-        className="bg-[#0b1120] border border-white/15 px-3 py-2 rounded-t flex items-center justify-between cursor-pointer hover:bg-[#111a2e]"
+        className="bg-[#090e1a]/95 border border-white/15 px-3.5 py-2.5 rounded-t-lg flex items-center justify-between cursor-pointer hover:bg-[#111a2e] tactical-glass"
       >
-        <div className="flex items-center gap-2">
-          <Radio className="w-3.5 h-3.5 text-red-400 animate-pulse" />
-          <span className="font-bold text-slate-100 text-xs tracking-wide">
-            OPERATIONAL ALERT STREAM
+        <div className="flex items-center gap-2.5">
+          <DecisionEngineIcon className="w-4 h-4 text-red-400 drop-shadow-[0_0_6px_rgba(239,68,68,0.5)]" />
+          <span className="font-bold text-slate-100 text-xs tracking-wider font-mono uppercase">
+            INCIDENT RADAR
           </span>
-          <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-red-500/20 text-red-300 border border-red-500/30">
+          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-red-500/20 text-red-300 border border-red-500/40 font-semibold">
             {criticalCount} CRITICAL
           </span>
         </div>
 
-        <button className="text-slate-400 hover:text-slate-200">
+        <button className="text-slate-400 hover:text-slate-200 transition-colors">
           {collapsed ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
         </button>
       </div>
@@ -74,17 +74,20 @@ export const AlertRail: React.FC<AlertRailProps> = ({
                 <div
                   key={alert.alert_id}
                   onClick={() => onJumpToSite(alert.site_id, alert.latitude ?? undefined, alert.longitude ?? undefined)}
-                  className={`p-2.5 rounded border transition-all cursor-pointer ${
+                  className={`p-2.5 rounded-lg border transition-all cursor-pointer ${
                     isCritical
-                      ? 'bg-red-950/20 border-red-500/40 hover:border-red-500/80'
-                      : 'bg-[#0c1424] border-white/10 hover:border-white/20'
+                      ? 'bg-red-950/25 border-red-500/40 hover:border-red-500/80 shadow-[0_0_12px_rgba(239,68,68,0.15)]'
+                      : 'bg-[#0c1424] border-white/10 hover:border-white/25 hover:bg-[#101b30]'
                   }`}
                 >
                   <div className="flex items-center justify-between font-mono text-[10px] mb-1">
-                    <span className="font-bold text-cyan-300">
-                      {alert.site_id}
-                    </span>
-                    <span className={`px-1.5 py-0.2 rounded font-semibold border ${
+                    <div className="flex items-center gap-1.5">
+                      <span className={`w-2 h-2 rounded-full ${isCritical ? 'bg-red-500 shadow-[0_0_8px_#ef4444] animate-pulse' : 'bg-orange-400'}`} />
+                      <span className="font-bold text-cyan-300">
+                        {alert.site_id}
+                      </span>
+                    </div>
+                    <span className={`px-2 py-0.5 rounded font-bold tracking-wider text-[9px] border ${
                       isCritical
                         ? 'bg-red-500/20 text-red-300 border-red-500/40'
                         : 'bg-orange-500/20 text-orange-300 border-orange-500/40'
@@ -93,13 +96,14 @@ export const AlertRail: React.FC<AlertRailProps> = ({
                     </span>
                   </div>
 
-                  <div className="text-[11px] font-medium text-slate-200 line-clamp-2 mb-1.5 leading-snug">
+                  <div className="text-[11.5px] font-medium text-slate-100 line-clamp-2 mb-2 leading-snug">
                     {alert.headline}
                   </div>
 
-                  <div className="flex items-center justify-between pt-1 border-t border-white/5 font-mono text-[9px]">
-                    <span className="text-slate-400">
-                      {alert.site_day}
+                  <div className="flex items-center justify-between pt-1.5 border-t border-white/10 font-mono text-[9.5px]">
+                    <span className="text-slate-400 flex items-center gap-1">
+                      <span className="text-slate-500">Day:</span>
+                      <span className="text-slate-300 font-semibold">{alert.site_day}</span>
                     </span>
 
                     <div className="flex items-center gap-1.5">
@@ -108,20 +112,20 @@ export const AlertRail: React.FC<AlertRailProps> = ({
                           e.stopPropagation();
                           onJumpToSite(alert.site_id, alert.latitude ?? undefined, alert.longitude ?? undefined);
                         }}
-                        className="px-2 py-0.5 rounded bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20 border border-cyan-500/30 flex items-center gap-1"
+                        className="px-2.5 py-1 rounded bg-cyan-500/15 text-cyan-300 hover:bg-cyan-500/30 border border-cyan-500/40 flex items-center gap-1 font-semibold transition-all hover:shadow-[0_0_8px_rgba(6,182,212,0.3)]"
                         title="Focus site on map"
                       >
-                        <Crosshair className="w-2.5 h-2.5" />
+                        <Crosshair className="w-3 h-3" />
                         <span>Locate</span>
                       </button>
 
                       <button
                         onClick={(e) => handleAck(alert.alert_id, e)}
                         disabled={ackingId === alert.alert_id}
-                        className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-600 flex items-center gap-1 disabled:opacity-50"
+                        className="px-2.5 py-1 rounded bg-slate-800/80 text-slate-300 hover:bg-slate-700 border border-white/10 flex items-center gap-1 transition-colors disabled:opacity-50"
                         title="Acknowledge alert"
                       >
-                        <Check className="w-2.5 h-2.5" />
+                        <Check className="w-3 h-3 text-emerald-400" />
                         <span>{ackingId === alert.alert_id ? 'Acking...' : 'Ack'}</span>
                       </button>
                     </div>

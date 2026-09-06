@@ -1,5 +1,4 @@
 import {
-  Flame,
   Activity,
   Layers,
   Radio,
@@ -7,6 +6,7 @@ import {
   Box,
   RotateCcw
 } from 'lucide-react';
+import { HeliosLogo } from './Icons';
 import type { SystemStats, HealthCheck } from '../types/api';
 
 interface HeaderProps {
@@ -36,9 +36,10 @@ export const Header: React.FC<HeaderProps> = ({
     <header className="h-14 bg-[#070a12] border-b border-white/10 px-4 flex items-center justify-between select-none z-30 relative shrink-0">
       {/* Brand & Mission Identifier */}
       <div className="flex items-center gap-3">
-        <div className="w-8 h-8 rounded bg-gradient-to-br from-amber-500/20 via-orange-500/25 to-red-600/30 border border-amber-500/50 flex items-center justify-center shadow-[0_0_15px_rgba(245,158,11,0.35)] relative overflow-hidden">
-          <Flame className="w-4 h-4 text-amber-400 relative z-10" />
-          <div className="absolute inset-0 bg-amber-400/10 animate-ping-slow" />
+        <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-amber-500/20 via-orange-500/25 to-red-600/30 border border-amber-500/40 flex items-center justify-center shadow-[0_0_16px_rgba(245,158,11,0.25)] relative overflow-hidden group">
+          <HeliosLogo className="w-6 h-6 text-amber-400 relative z-10 drop-shadow-[0_0_8px_rgba(245,158,11,0.5)]" />
+          <div className="absolute inset-0 bg-amber-400/10 animate-ping-slow pointer-events-none" />
+          <div className="absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-white/10" />
         </div>
         <div>
           <div className="flex items-center gap-2">
