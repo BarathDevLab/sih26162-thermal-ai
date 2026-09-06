@@ -9,8 +9,22 @@ import io
 import csv
 import time
 import logging
+from pathlib import Path
 from typing import List, Dict, Any, Optional
 import httpx
+from dotenv import load_dotenv
+
+# Automatically load environment variables from .env or backend/.env
+_curr = Path(__file__).resolve()
+for _candidate in [
+    Path.cwd() / ".env",
+    Path.cwd() / "backend" / ".env",
+    _curr.parents[2] / ".env",
+    _curr.parents[3] / ".env",
+    _curr.parents[3] / "backend" / ".env"
+]:
+    if _candidate.exists():
+        load_dotenv(str(_candidate))
 
 logger = logging.getLogger(__name__)
 

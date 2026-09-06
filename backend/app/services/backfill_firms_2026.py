@@ -5,6 +5,14 @@ Incrementally updates source sites, daily activity, and recalculates Model B & M
 """
 
 import os
+import sys
+from pathlib import Path
+
+# Ensure project root is in sys.path when invoked directly as a script
+_root = Path(__file__).resolve().parents[3]
+if str(_root) not in sys.path:
+    sys.path.insert(0, str(_root))
+
 import argparse
 import logging
 from datetime import datetime, timedelta
@@ -229,12 +237,13 @@ def main():
     parser = argparse.ArgumentParser(description="NASA FIRMS 2026 Backfill CLI")
     parser.add_argument("--start-date", default="2026-01-01", help="Backfill start date (YYYY-MM-DD)")
     parser.add_argument("--end-date", default=None, help="Backfill end date (YYYY-MM-DD)")
+    parser.add_argument("--map-key", default=None, help="NASA FIRMS MAP_KEY (defaults to FIRMS_MAP_KEY in .env)")
     parser.add_argument("--dry-run", action="store_true", help="Perform dry run without writing files")
     parser.add_argument("--offline", action="store_true", help="Run in offline mode")
     parser.add_argument("--cache-dir", default="data/cache/firms", help="Directory to cache FIRMS responses")
     args = parser.parse_args()
 
-    client = FirmsClient(offline_mode=args.offline, cache_dir=args.cache_dir)
+    client = FirmsClient(map_key=args.map_key, offline_mode=args.offline, cache_dir=args.cache_dir)
     orchestrator = BackfillOrchestrator(firms_client=client)
     res = orchestrator.run_backfill(
         start_date=args.start_date,

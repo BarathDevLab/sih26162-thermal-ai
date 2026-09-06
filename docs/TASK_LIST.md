@@ -11,10 +11,10 @@ Phase 0: Freeze Packaging & Workspace Bootstrap  ──▶ [COMPLETED ✅]
 Phase 1: Backend Intelligence Engines           ──▶ [COMPLETED ✅]
 Phase 2: Live FIRMS Client & 2026 Backfill      ──▶ [COMPLETED ✅]
 Phase 3: Decision & Alert Engine                ──▶ [COMPLETED ✅]
-Phase 4: PostgreSQL / PostGIS Database Layer    ──▶ [READY TO START 📍]
-Phase 5: Normalized FastAPI Endpoints           ──▶ [PENDING ⏳]
-Phase 6: OSIRIS Web Command Center (Frontend)   ──▶ [PENDING ⏳]
-Phase 7: Live Scheduling & Async Queues         ──▶ [PENDING ⏳]
+Phase 4: PostgreSQL / PostGIS Database Layer    ──▶ [COMPLETED ✅]
+Phase 5: Normalized FastAPI Endpoints           ──▶ [COMPLETED ✅]
+Phase 6: OSIRIS Web Command Center (Frontend)   ──▶ [COMPLETED ✅]
+Phase 7: Live Scheduling & Async Queues         ──▶ [READY TO START 📍]
 Phase 8: Demo Replay & Hardening                ──▶ [PENDING ⏳]
 ```
 
@@ -95,44 +95,48 @@ Phase 8: Demo Replay & Hardening                ──▶ [PENDING ⏳]
 ---
 
 ### Phase 4: PostgreSQL / PostGIS Database Layer
-**Status:** **PENDING ⏳**
+**Status:** **COMPLETED ✅**
 
-- [ ] Define SQLAlchemy declarative models for all 12 core tables (`firms_detections`, `source_sites`, `site_daily_activity`, `site_model_a`, `site_model_b`, `site_model_c`, `alerts`, `facility_evidence`, etc.).
-- [ ] Spatial GiST indexing on point geometries.
-- [ ] Set up Alembic migration environment.
-- [ ] **`bootstrap_db.py`:** Script to load the 79k sites, 2025 daily activity, evidence tables, and precomputed states into PostGIS.
+- [x] **Database Session & Connection (`session.py`):** Configured engine pooling, `get_db` FastAPI dependency, and automatic PostGIS detection with SQLite fallback.
+- [x] **Declarative Core Models (`models.py`):** Implemented all 12 core tables (`source_sites`, `firms_detections`, `candidate_sources`, `site_daily_activity`, `site_model_a`, `site_model_b`, `site_model_c`, `site_daily_inference`, `alerts`, `facility_evidence`, `imagery_cache`, `model_versions`, `ingestion_runs`) with spatial and composite indexes.
+- [x] **Schema & Extension Initialization:** Created PostgreSQL database `sih26162` on port 5432, verified PostGIS extension activation (`spatial_ref_sys`, `geometry_columns`).
+- [x] **High-Speed Bootstrap Loader (`bootstrap_db.py`):** Populated all 79,365 physical sites, 79,365 Model A predictions, 79,365 Model B states, 297,348 daily activity records, 297,348 historical inferences, 79,365 materialized Model C statuses, 6,294 facility evidence records (GEM, GFMR, ICAR), and 948 initial operational alerts.
+- [x] **Model & CRUD Tests (`test_db_models.py`):** 7 passing tests validating table initialization, primary keys, foreign key constraints, composite constraints, and spatial indexes.
 
 ---
 
 ### Phase 5: Normalized FastAPI Endpoints
-**Status:** **PENDING ⏳**
+**Status:** **COMPLETED ✅**
 
-- [ ] `GET /api/v1/health` (service status, DB connectivity, model stack version).
-- [ ] `GET /api/v1/stats` (global counts for header cards).
-- [ ] `GET /api/v1/sites?bbox=&a_class=&b_state=&c_status=` (compact viewport GeoJSON).
-- [ ] `GET /api/v1/sites/{site_id}` (full site intelligence summary).
-- [ ] `GET /api/v1/sites/{site_id}/timeline` (daily FRP + Model C scores).
-- [ ] `GET /api/v1/sites/{site_id}/evidence` (GEM, GFMR, FSI context).
-- [ ] `GET /api/v1/sites/{site_id}/detections` (raw FIRMS detection records).
-- [ ] `GET /api/v1/alerts` (active operational alert feed).
-- [ ] `GET /api/v1/replay?date=` (historical date snapshot reconstruction).
-- [ ] `GET /api/v1/stream/alerts` (Server-Sent Events / WebSocket real-time alert updates).
+- [x] `GET /api/v1/health` (service status, DB connectivity, model stack version).
+- [x] `GET /api/v1/stats` (global counts for header cards).
+- [x] `GET /api/v1/sites?bbox=&a_class=&b_state=&c_status=` (compact viewport GeoJSON).
+- [x] `GET /api/v1/sites/{site_id}` (full site intelligence summary).
+- [x] `GET /api/v1/sites/{site_id}/timeline` (daily FRP + Model C scores).
+- [x] `GET /api/v1/sites/{site_id}/evidence` (GEM, GFMR, FSI context).
+- [x] `GET /api/v1/sites/{site_id}/detections` (raw FIRMS detection records).
+- [x] `GET /api/v1/sites/{site_id}/imagery` (cached HLS/Prithvi satellite patches).
+- [x] `GET /api/v1/alerts` (active operational alert feed).
+- [x] `POST /api/v1/alerts/{alert_id}/ack` (analyst alert triage workflow).
+- [x] `GET /api/v1/layers/firms` (raw FIRMS hotspots GeoJSON for deck.gl).
+- [x] `GET /api/v1/replay?date=` (historical date snapshot reconstruction without leakage).
+- [x] `GET /api/v1/stream/alerts` (Server-Sent Events real-time alert updates with bounded streaming support).
+- [x] `test_api_v1.py`: Full test suite covering all 18 endpoints, edge cases, and SSE streaming.
 
 ---
 
 ### Phase 6: OSIRIS Web Command Center (Frontend)
-**Status:** **PENDING ⏳**
+**Status:** **COMPLETED ✅**
 
-- [ ] **Center Map:** MapLibre GL JS + deck.gl WebGL viewport with GPU site point clustering, raw detection layer, and alert pulse styling.
-- [ ] **Left Filter Panel:** Multi-layer toggles (A identity, B temporal states, C anomaly severity, evidence layers, date range slider).
-- [ ] **Right Site Intelligence Drawer:**
-  - [ ] Overview tab (provenance, confidence, current FRP).
-  - [ ] Timeline tab (Recharts/ECharts visualization of daily FRP and Model C scores).
-  - [ ] Satellite tab (HLS scene viewer, cloud screening badge, Prithvi score if triggered).
-  - [ ] Evidence tab (nearby power plants, refineries, land-cover composition).
-  - [ ] Raw FIRMS tab (detection log table).
-- [ ] **Top Status Bar:** Mode toggle (LIVE vs. REPLAY), active model version badge, system health.
-- [ ] **Bottom / Secondary Timeline:** Historical playback slider for replay mode.
+- [x] **Design Tokens & System (`DESIGN.md`):** Established dark lacquer palette, strict Model A/B/C and evidence semantic isolation, and Impeccable `Operate` mode hierarchy.
+- [x] **API & State Layer (`types/api.ts`, `services/api.ts`):** Complete TypeScript definitions matching Phase 5 schemas with live SSE stream subscription.
+- [x] **Top Status Bar (`Header.tsx`):** LIVE / REPLAY toggle, 2D / 3D camera switcher, model version badge (`2026-09-04-r1`), national statistics chips, and SSE pulse indicator.
+- [x] **Left Filter Matrix (`SidebarFilters.tsx`):** Multi-layer filter rail covering Model A identity, Model B temporal states, Model C anomaly severity, evidence toggles (GEM, GFMR, ICAR, FSI), and 3D spike scaling.
+- [x] **Geospatial Cockpit (`MapContainer.tsx`):** MapLibre GL JS + deck.gl WebGL engine featuring GPU site clustering, 3D thermal FRP elevation spikes (`ColumnLayer`), hover tooltips, and interactive site selection.
+- [x] **Right Intelligence Drawer (`SiteDrawer.tsx`):** Multi-tab deep inspection panel (Overview, SVG Thermal Timeline chart, Corroborating Evidence, Satellite HLS/Prithvi, and Raw FIRMS detections).
+- [x] **Operational Alert Rail (`AlertRail.tsx`):** Floating streaming alert feed with critical badges, "Locate" map focus, and analyst triage acknowledgement.
+- [x] **Historical Replay Scrubber (`ReplayScrubber.tsx`):** Date slider across 2025–2026 with play/pause playback controls enforcing zero future state leakage.
+- [x] **Production Verification:** Built successfully with `npm run build` (0 TypeScript errors, 644ms Vite production build).
 
 ---
 
