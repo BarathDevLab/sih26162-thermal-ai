@@ -138,9 +138,6 @@ export default function App() {
       .then((detail) => {
         if (active) {
           setSelectedSite(detail);
-          if (detail.longitude !== undefined && detail.latitude !== undefined) {
-            setFocusedCoordinates([detail.longitude, detail.latitude]);
-          }
         }
       })
       .catch((err) => {

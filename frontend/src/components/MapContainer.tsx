@@ -127,6 +127,8 @@ export const MapContainer: React.FC<MapContainerProps> = ({
   const onBoundsChangeRef = useRef(onBoundsChange);
   onBoundsChangeRef.current = onBoundsChange;
 
+  const lastFlownCoordsRef = useRef<[number, number] | null>(null);
+
   // Add source data and layers helper
   const setupLayers = (map: MapLibreMap) => {
     // 0. VIIRS Scanning Swath Footprints Source & Layer
@@ -556,88 +558,96 @@ export const MapContainer: React.FC<MapContainerProps> = ({
         console.warn('DeckGL overlay not initialized:', deckErr);
       }
 
-      // 1. Cluster Click Handler: Exactly zooms into the cluster's micro-sites
+      // 1. Progressive Hierarchical Cluster Zoom Handler
       const handleClusterClick = async (e: maplibregl.MapMouseEvent & { features?: maplibregl.MapGeoJSONFeature[] }) => {
         if (!e.features || !e.features[0]) return;
         if (popupRef.current) popupRef.current.remove();
 
         const feature = e.features[0];
         const clusterId = feature.properties?.cluster_id;
+        const pointCount = feature.properties?.point_count || 0;
         const coords = (feature.geometry as any).coordinates as [number, number];
         const source = map.getSource('sites-geojson') as maplibregl.GeoJSONSource;
         if (!source || clusterId === undefined) return;
 
+        const currentZoom = map.getZoom();
+
         try {
-          // Query up to 500 site leaves in this cluster to calculate precise geographic bounds
-          const leaves = await source.getClusterLeaves(clusterId, 500, 0);
-          if (leaves && leaves.length > 0) {
-            let minLon = Infinity;
-            let minLat = Infinity;
-            let maxLon = -Infinity;
-            let maxLat = -Infinity;
+          // Get the expansion zoom for this specific cluster (where it decomposes into child clusters or points)
+          const expansionZoom = await source.getClusterExpansionZoom(clusterId);
 
-            for (const leaf of leaves) {
-              const c = (leaf.geometry as any).coordinates;
-              if (c && c.length >= 2) {
-                if (c[0] < minLon) minLon = c[0];
-                if (c[1] < minLat) minLat = c[1];
-                if (c[0] > maxLon) maxLon = c[0];
-                if (c[1] > maxLat) maxLat = c[1];
+          // Check if this cluster is already at the terminal micro-level
+          // (very small point count, or expansion zoom reaches the unclustered tier >= 10)
+          if (pointCount <= 3 || expansionZoom >= 10) {
+            const leaves = await source.getClusterLeaves(clusterId, 50, 0);
+            if (leaves && leaves.length > 0) {
+              let minLon = Infinity;
+              let minLat = Infinity;
+              let maxLon = -Infinity;
+              let maxLat = -Infinity;
+
+              for (const leaf of leaves) {
+                const c = (leaf.geometry as any).coordinates;
+                if (c && c.length >= 2) {
+                  if (c[0] < minLon) minLon = c[0];
+                  if (c[1] < minLat) minLat = c[1];
+                  if (c[0] > maxLon) maxLon = c[0];
+                  if (c[1] > maxLat) maxLat = c[1];
+                }
               }
-            }
 
-            const lonSpan = maxLon - minLon;
-            const latSpan = maxLat - minLat;
+              const span = Math.max(maxLon - minLon, maxLat - minLat);
 
-            // If points are at a single facility site or within tight radius (< 0.015 deg ~ 1.5 km)
-            if (lonSpan < 0.015 && latSpan < 0.015) {
-              const centerLon = (minLon + maxLon) / 2;
-              const centerLat = (minLat + maxLat) / 2;
-              map.flyTo({
-                center: [centerLon, centerLat],
-                zoom: 13.5,
-                pitch: is3D ? 50 : map.getPitch(),
-                duration: 900
-              });
-
-              // Select the primary site immediately
-              if (leaves[0]?.properties?.site_id) {
-                onSelectSiteRef.current(leaves[0].properties.site_id);
+              // If co-located within a single facility (< 0.015 deg ~ 1.5 km)
+              if (span < 0.015) {
+                map.easeTo({
+                  center: [(minLon + maxLon) / 2, (minLat + maxLat) / 2],
+                  zoom: 13.0,
+                  duration: 750
+                });
+                if (leaves[0]?.properties?.site_id) {
+                  onSelectSiteRef.current(leaves[0].properties.site_id);
+                }
+                return;
               }
+
+              // Tight local group: frame them at micro-site resolution
+              map.fitBounds(
+                [
+                  [minLon, minLat],
+                  [maxLon, maxLat]
+                ],
+                {
+                  padding: { top: 90, bottom: 90, left: 100, right: 100 },
+                  maxZoom: 12.5,
+                  duration: 800
+                }
+              );
               return;
             }
-
-            // Otherwise, fit bounds to enclose all cluster micro-sites with comfortable margin
-            map.fitBounds(
-              [
-                [minLon, minLat],
-                [maxLon, maxLat]
-              ],
-              {
-                padding: { top: 90, bottom: 90, left: 100, right: 100 },
-                maxZoom: 13.5,
-                duration: 900
-              }
-            );
-            return;
           }
-        } catch (leavesErr) {
-          console.warn('Failed to get cluster leaves, falling back to expansion zoom:', leavesErr);
-        }
 
-        // Fallback: get cluster expansion zoom
-        try {
-          const expansionZoom = await source.getClusterExpansionZoom(clusterId);
-          map.flyTo({
+          // Progressive Hierarchical Zoom for larger and intermediate clusters:
+          // Advance zoom to break this cluster into its smaller sub-clusters.
+          // Step by at least +1.6 to ensure clear cluster splitting, capped at +2.8 to prevent skipping levels.
+          const minStep = 1.6;
+          const maxStep = 2.8;
+          let targetZoom = Math.max(expansionZoom + 0.3, currentZoom + minStep);
+          if (targetZoom - currentZoom > maxStep) {
+            targetZoom = currentZoom + maxStep;
+          }
+
+          map.easeTo({
             center: coords,
-            zoom: Math.max(expansionZoom, map.getZoom() + 3),
-            duration: 850
+            zoom: targetZoom,
+            duration: 650
           });
-        } catch (zoomErr) {
-          map.flyTo({
+        } catch (err) {
+          console.warn('Progressive cluster zoom fallback:', err);
+          map.easeTo({
             center: coords,
-            zoom: map.getZoom() + 3,
-            duration: 850
+            zoom: currentZoom + 2.0,
+            duration: 600
           });
         }
       };
@@ -648,7 +658,7 @@ export const MapContainer: React.FC<MapContainerProps> = ({
         map.on('click', layerId, handleClusterClick);
       });
 
-      // 2. Unclustered Site Click Handler: Select and center directly on the site at high-res zoom
+      // 2. Unclustered Site Click Handler: Select and gently ease to the site
       const handleSiteClick = (e: maplibregl.MapMouseEvent & { features?: maplibregl.MapGeoJSONFeature[] }) => {
         if (!e.features || !e.features[0]) return;
         if (popupRef.current) popupRef.current.remove();
@@ -661,11 +671,11 @@ export const MapContainer: React.FC<MapContainerProps> = ({
         }
 
         if (coords && coords.length >= 2) {
-          map.flyTo({
+          map.easeTo({
             center: coords,
-            zoom: Math.max(map.getZoom(), 13.5),
+            zoom: Math.max(map.getZoom(), 12.5),
             pitch: is3D ? 52 : map.getPitch(),
-            duration: 850
+            duration: 750
           });
         }
       };
@@ -849,38 +859,26 @@ export const MapContainer: React.FC<MapContainerProps> = ({
     });
   };
 
-  // 4. Focus coordinates when selecting from alert rail or drawer
+  // 4. Focus coordinates when explicitly requested (e.g. "Locate" button in Alert Rail)
   useEffect(() => {
     const map = mapRef.current;
-    if (!map) return;
+    if (!map || !focusedCoordinates || focusedCoordinates.length < 2) return;
 
-    if (focusedCoordinates && focusedCoordinates.length >= 2) {
+    const [lon, lat] = focusedCoordinates;
+    if (
+      !lastFlownCoordsRef.current ||
+      lastFlownCoordsRef.current[0] !== lon ||
+      lastFlownCoordsRef.current[1] !== lat
+    ) {
+      lastFlownCoordsRef.current = [lon, lat];
       map.flyTo({
-        center: focusedCoordinates,
-        zoom: 13.5,
+        center: [lon, lat],
+        zoom: 13.0,
         pitch: is3D ? 52 : map.getPitch(),
-        duration: 1200
+        duration: 1000
       });
-      return;
     }
-
-    if (selectedSiteId && sitesData) {
-      const siteFeature = sitesData.features.find(f => f.properties.site_id === selectedSiteId);
-      if (siteFeature?.geometry?.coordinates) {
-        const [lon, lat] = siteFeature.geometry.coordinates;
-        const center = map.getCenter();
-        const dist = Math.hypot(center.lng - lon, center.lat - lat);
-        if (dist > 0.002 || map.getZoom() < 12) {
-          map.flyTo({
-            center: [lon, lat],
-            zoom: Math.max(map.getZoom(), 13.5),
-            pitch: is3D ? 52 : map.getPitch(),
-            duration: 1000
-          });
-        }
-      }
-    }
-  }, [focusedCoordinates, selectedSiteId, sitesData, is3D]);
+  }, [focusedCoordinates, is3D]);
 
   // 5. Update GeoJSON Source & deck.gl 3D Volumetric Thermal Columns
   useEffect(() => {
