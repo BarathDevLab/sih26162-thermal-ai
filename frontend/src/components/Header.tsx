@@ -36,30 +36,36 @@ export const Header: React.FC<HeaderProps> = ({
     <header className="h-14 bg-[#070a12] border-b border-white/10 px-4 flex items-center justify-between select-none z-30 relative shrink-0">
       {/* Brand & Mission Identifier */}
       <div className="flex items-center gap-3">
-        <div className="w-8 h-8 rounded bg-gradient-to-br from-amber-500/20 to-orange-600/30 border border-amber-500/40 flex items-center justify-center shadow-[0_0_12px_rgba(245,158,11,0.25)]">
-          <Flame className="w-4 h-4 text-amber-400" />
+        <div className="w-8 h-8 rounded bg-gradient-to-br from-amber-500/20 via-orange-500/25 to-red-600/30 border border-amber-500/50 flex items-center justify-center shadow-[0_0_15px_rgba(245,158,11,0.35)] relative overflow-hidden">
+          <Flame className="w-4 h-4 text-amber-400 relative z-10" />
+          <div className="absolute inset-0 bg-amber-400/10 animate-ping-slow" />
         </div>
         <div>
           <div className="flex items-center gap-2">
-            <h1 className="text-sm font-bold tracking-wider text-slate-100 uppercase">
-              SIH26162 OSIRIS
+            <h1 className="text-sm font-black tracking-widest text-slate-100 uppercase font-mono">
+              SIH26162 <span className="text-amber-400">HELIOS</span>
             </h1>
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-300 font-mono border border-amber-500/30">
+            <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 font-mono border border-amber-500/30 font-bold tracking-wider">
               THERMAL AI
             </span>
+            <span className="text-[9px] px-1.5 py-0.5 rounded bg-cyan-500/15 text-cyan-300 font-mono border border-cyan-500/30 tracking-wider">
+              OSIRIS COCKPIT
+            </span>
           </div>
-          <p className="text-[11px] text-slate-400 font-mono tracking-tight">
-            Industrial Thermal Intelligence Platform
+          <p className="text-[10.5px] text-slate-400 font-mono tracking-tight flex items-center gap-1.5">
+            <span>Orbital Infrared Early-Warning Command Center</span>
+            <span className="text-slate-600">&bull;</span>
+            <span className="text-emerald-400">VIIRS NOAA-20/21</span>
           </p>
         </div>
       </div>
 
       {/* Center Telemetry Readouts */}
-      <div className="hidden lg:flex items-center gap-4 bg-[#0c1322] border border-white/5 py-1 px-3 rounded-md">
+      <div className="hidden lg:flex items-center gap-4 bg-[#090e1a]/90 border border-white/10 py-1.5 px-3.5 rounded-lg tactical-glass shadow-lg">
         <div className="flex items-center gap-1.5">
           <Layers className="w-3.5 h-3.5 text-cyan-400" />
-          <span className="text-[11px] text-slate-400">Total Sites:</span>
-          <span className="text-xs font-mono font-bold text-slate-200">
+          <span className="text-[11px] text-slate-400 font-mono">Sites:</span>
+          <span className="text-xs font-mono font-bold text-white">
             {stats?.total_sites ? stats.total_sites.toLocaleString() : '79,365'}
           </span>
         </div>
@@ -68,7 +74,7 @@ export const Header: React.FC<HeaderProps> = ({
 
         <div className="flex items-center gap-1.5">
           <Activity className="w-3.5 h-3.5 text-emerald-400" />
-          <span className="text-[11px] text-slate-400">30d Active:</span>
+          <span className="text-[11px] text-slate-400 font-mono">30d Active:</span>
           <span className="text-xs font-mono font-bold text-emerald-400">
             {stats?.active_sites_30d ? stats.active_sites_30d.toLocaleString() : '9,010'}
           </span>
@@ -77,8 +83,18 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="h-3 w-px bg-white/10" />
 
         <div className="flex items-center gap-1.5">
-          <Radio className="w-3.5 h-3.5 text-red-400" />
-          <span className="text-[11px] text-slate-400">Active Alerts:</span>
+          <span className="w-2 h-2 rounded-full bg-amber-400 shadow-[0_0_6px_#f59e0b]" />
+          <span className="text-[11px] text-slate-400 font-mono">Industrial:</span>
+          <span className="text-xs font-mono font-bold text-amber-400">
+            {stats?.model_a_counts?.['INDUSTRIAL'] ? stats.model_a_counts['INDUSTRIAL'].toLocaleString() : '808'}
+          </span>
+        </div>
+
+        <div className="h-3 w-px bg-white/10" />
+
+        <div className="flex items-center gap-1.5">
+          <Radio className="w-3.5 h-3.5 text-red-400 animate-pulse" />
+          <span className="text-[11px] text-slate-400 font-mono">Active Alerts:</span>
           <span className="text-xs font-mono font-bold text-red-400">
             {activeAlertCount}
           </span>
@@ -87,8 +103,8 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="h-3 w-px bg-white/10" />
 
         <div className="flex items-center gap-1.5">
-          <span className="text-[10px] text-slate-400">Stack:</span>
-          <span className="text-[11px] font-mono px-1.5 py-0.2 rounded bg-slate-800 text-slate-300 border border-slate-700">
+          <span className="text-[10px] text-slate-400 font-mono">Stack:</span>
+          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700 font-bold">
             {modelVersion}
           </span>
         </div>

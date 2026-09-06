@@ -175,3 +175,42 @@ function round(val: number, decimals: number): number {
   const factor = Math.pow(10, decimals);
   return Math.round(val * factor) / factor;
 }
+
+// 3. Generate VIIRS 3,000 km Scanning Swath Footprints
+export function getSensorSwathPolygons(): { type: 'FeatureCollection'; features: any[] } {
+  // NOAA-20 active scanning swath (~3000 km cross-track width centered on ascending pass over India/Asia)
+  const swathWidthDeg = 14.5; // ~1500 km half-width in degrees
+  const centerNode = 78.0; // Centered near India sub-satellite track
+
+  const leftEdge: [number, number][] = [];
+  const rightEdge: [number, number][] = [];
+
+  for (let lat = -50; lat <= 70; lat += 5) {
+    const lonCenter = centerNode - (lat * 0.15); // Sun-synchronous inclination drift
+    leftEdge.push([lonCenter - swathWidthDeg, lat]);
+    rightEdge.push([lonCenter + swathWidthDeg, lat]);
+  }
+
+  const polygonCoords = [...leftEdge, ...rightEdge.reverse(), leftEdge[0]];
+
+  return {
+    type: 'FeatureCollection',
+    features: [
+      {
+        type: 'Feature',
+        geometry: {
+          type: 'Polygon',
+          coordinates: [polygonCoords]
+        },
+        properties: {
+          id: 'SWATH_NOAA20',
+          name: 'VIIRS NOAA-20 NRT 3,000km Orbit Swath',
+          sensor: 'VIIRS (375m MWIR/LWIR)',
+          fillColor: 'rgba(6, 182, 212, 0.08)',
+          strokeColor: 'rgba(6, 182, 212, 0.35)'
+        }
+      }
+    ]
+  };
+}
+
