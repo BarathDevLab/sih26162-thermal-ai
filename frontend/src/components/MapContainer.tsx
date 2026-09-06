@@ -556,12 +556,134 @@ export const MapContainer: React.FC<MapContainerProps> = ({
         console.warn('DeckGL overlay not initialized:', deckErr);
       }
 
-      // Interactive Click Handling
-      map.on('click', 'unclustered-point', (e) => {
+      // 1. Cluster Click Handler: Exactly zooms into the cluster's micro-sites
+      const handleClusterClick = async (e: maplibregl.MapMouseEvent & { features?: maplibregl.MapGeoJSONFeature[] }) => {
         if (!e.features || !e.features[0]) return;
-        const props = e.features[0].properties;
+        if (popupRef.current) popupRef.current.remove();
+
+        const feature = e.features[0];
+        const clusterId = feature.properties?.cluster_id;
+        const coords = (feature.geometry as any).coordinates as [number, number];
+        const source = map.getSource('sites-geojson') as maplibregl.GeoJSONSource;
+        if (!source || clusterId === undefined) return;
+
+        try {
+          // Query up to 500 site leaves in this cluster to calculate precise geographic bounds
+          const leaves = await source.getClusterLeaves(clusterId, 500, 0);
+          if (leaves && leaves.length > 0) {
+            let minLon = Infinity;
+            let minLat = Infinity;
+            let maxLon = -Infinity;
+            let maxLat = -Infinity;
+
+            for (const leaf of leaves) {
+              const c = (leaf.geometry as any).coordinates;
+              if (c && c.length >= 2) {
+                if (c[0] < minLon) minLon = c[0];
+                if (c[1] < minLat) minLat = c[1];
+                if (c[0] > maxLon) maxLon = c[0];
+                if (c[1] > maxLat) maxLat = c[1];
+              }
+            }
+
+            const lonSpan = maxLon - minLon;
+            const latSpan = maxLat - minLat;
+
+            // If points are at a single facility site or within tight radius (< 0.015 deg ~ 1.5 km)
+            if (lonSpan < 0.015 && latSpan < 0.015) {
+              const centerLon = (minLon + maxLon) / 2;
+              const centerLat = (minLat + maxLat) / 2;
+              map.flyTo({
+                center: [centerLon, centerLat],
+                zoom: 13.5,
+                pitch: is3D ? 50 : map.getPitch(),
+                duration: 900
+              });
+
+              // Select the primary site immediately
+              if (leaves[0]?.properties?.site_id) {
+                onSelectSiteRef.current(leaves[0].properties.site_id);
+              }
+              return;
+            }
+
+            // Otherwise, fit bounds to enclose all cluster micro-sites with comfortable margin
+            map.fitBounds(
+              [
+                [minLon, minLat],
+                [maxLon, maxLat]
+              ],
+              {
+                padding: { top: 90, bottom: 90, left: 100, right: 100 },
+                maxZoom: 13.5,
+                duration: 900
+              }
+            );
+            return;
+          }
+        } catch (leavesErr) {
+          console.warn('Failed to get cluster leaves, falling back to expansion zoom:', leavesErr);
+        }
+
+        // Fallback: get cluster expansion zoom
+        try {
+          const expansionZoom = await source.getClusterExpansionZoom(clusterId);
+          map.flyTo({
+            center: coords,
+            zoom: Math.max(expansionZoom, map.getZoom() + 3),
+            duration: 850
+          });
+        } catch (zoomErr) {
+          map.flyTo({
+            center: coords,
+            zoom: map.getZoom() + 3,
+            duration: 850
+          });
+        }
+      };
+
+      // Register cluster click handlers across all cluster layers
+      const clusterClickLayers = ['clusters', 'cluster-count', 'cluster-radar-halo', 'cluster-tag-labels'];
+      clusterClickLayers.forEach((layerId) => {
+        map.on('click', layerId, handleClusterClick);
+      });
+
+      // 2. Unclustered Site Click Handler: Select and center directly on the site at high-res zoom
+      const handleSiteClick = (e: maplibregl.MapMouseEvent & { features?: maplibregl.MapGeoJSONFeature[] }) => {
+        if (!e.features || !e.features[0]) return;
+        if (popupRef.current) popupRef.current.remove();
+        const feature = e.features[0];
+        const props = feature.properties;
+        const coords = (feature.geometry as any).coordinates as [number, number];
+
         if (props?.site_id) {
           onSelectSiteRef.current(props.site_id);
+        }
+
+        if (coords && coords.length >= 2) {
+          map.flyTo({
+            center: coords,
+            zoom: Math.max(map.getZoom(), 13.5),
+            pitch: is3D ? 52 : map.getPitch(),
+            duration: 850
+          });
+        }
+      };
+
+      // Register site click handlers across all unclustered layers
+      const siteClickLayers = ['unclustered-point', 'unclustered-hot-center', 'unclustered-reticle', 'tactical-site-callouts'];
+      siteClickLayers.forEach((layerId) => {
+        map.on('click', layerId, handleSiteClick);
+      });
+
+      // Also handle clicks on heat bloom (delegates to cluster or site)
+      map.on('click', 'thermal-heat-bloom', (e) => {
+        if (!e.features || !e.features[0]) return;
+        const f = e.features[0];
+        if (f.properties?.point_count) {
+          handleClusterClick(e);
+        } else if (f.properties?.site_id) {
+          handleSiteClick(e);
         }
       });
 
@@ -573,59 +695,64 @@ export const MapContainer: React.FC<MapContainerProps> = ({
       });
       popupRef.current = popup;
 
-      map.on('mouseenter', 'unclustered-point', (e) => {
-        map.getCanvas().style.cursor = 'pointer';
-        if (!e.features || !e.features[0]) return;
-        const coordinates = (e.features[0].geometry as any).coordinates.slice();
-        const p = e.features[0].properties as any;
+      // Hover on unclustered site layers
+      siteClickLayers.forEach((layerId) => {
+        map.on('mouseenter', layerId, (e) => {
+          map.getCanvas().style.cursor = 'pointer';
+          if (!e.features || !e.features[0]) return;
+          const coordinates = (e.features[0].geometry as any).coordinates.slice();
+          const p = e.features[0].properties as any;
 
-        const html = `
-          <div style="font-family: monospace; font-size: 11px; line-height: 1.45; min-width: 170px;">
-            <div style="display: flex; items-center; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.15); padding-bottom: 3px; margin-bottom: 4px;">
-              <span style="font-weight: bold; color: #38bdf8; letter-spacing: 0.5px;">${p.site_id}</span>
-              <span style="color: #64748b; font-size: 9px;">LOC-LOCK</span>
+          const html = `
+            <div style="font-family: monospace; font-size: 11px; line-height: 1.45; min-width: 170px;">
+              <div style="display: flex; items-center; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.15); padding-bottom: 3px; margin-bottom: 4px;">
+                <span style="font-weight: bold; color: #38bdf8; letter-spacing: 0.5px;">${p.site_id}</span>
+                <span style="color: #64748b; font-size: 9px;">LOC-LOCK</span>
+              </div>
+              <div style="color: #94a3b8; font-size: 9.5px;">COORD: ${coordinates[1].toFixed(4)}°N, ${coordinates[0].toFixed(4)}°E</div>
+              <div style="margin-top: 5px; display: flex; flex-wrap: wrap; gap: 4px;">
+                <span style="background: rgba(245,158,11,0.25); color: #f59e0b; border: 1px solid rgba(245,158,11,0.4); padding: 1px 4px; border-radius: 3px; font-size: 9px; font-weight: bold;">${p.a_class}</span>
+                <span style="background: rgba(6,182,212,0.2); color: #06b6d4; border: 1px solid rgba(6,182,212,0.4); padding: 1px 4px; border-radius: 3px; font-size: 9px;">${p.b_state}</span>
+                <span style="background: rgba(239,68,68,0.25); color: #ef4444; border: 1px solid rgba(239,68,68,0.4); padding: 1px 4px; border-radius: 3px; font-size: 9px; font-weight: bold;">${p.c_status}</span>
+              </div>
+              ${p.alert_severity && p.alert_severity !== 'NONE' ? `
+                <div style="background: rgba(239,68,68,0.2); border: 1px solid rgba(239,68,68,0.5); color: #ef4444; font-weight: bold; font-size: 9px; padding: 2px 4px; border-radius: 3px; margin-top: 5px; text-align: center;">
+                  ⚡ ALERT: ${p.alert_severity}
+                </div>` : ''}
             </div>
-            <div style="color: #94a3b8; font-size: 9.5px;">COORD: ${coordinates[1].toFixed(4)}°N, ${coordinates[0].toFixed(4)}°E</div>
-            <div style="margin-top: 5px; display: flex; flex-wrap: wrap; gap: 4px;">
-              <span style="background: rgba(245,158,11,0.25); color: #f59e0b; border: 1px solid rgba(245,158,11,0.4); padding: 1px 4px; border-radius: 3px; font-size: 9px; font-weight: bold;">${p.a_class}</span>
-              <span style="background: rgba(6,182,212,0.2); color: #06b6d4; border: 1px solid rgba(6,182,212,0.4); padding: 1px 4px; border-radius: 3px; font-size: 9px;">${p.b_state}</span>
-              <span style="background: rgba(239,68,68,0.25); color: #ef4444; border: 1px solid rgba(239,68,68,0.4); padding: 1px 4px; border-radius: 3px; font-size: 9px; font-weight: bold;">${p.c_status}</span>
-            </div>
-            ${p.alert_severity && p.alert_severity !== 'NONE' ? `
-              <div style="background: rgba(239,68,68,0.2); border: 1px solid rgba(239,68,68,0.5); color: #ef4444; font-weight: bold; font-size: 9px; padding: 2px 4px; border-radius: 3px; margin-top: 5px; text-align: center;">
-                ⚡ ALERT: ${p.alert_severity}
-              </div>` : ''}
-          </div>
-        `;
+          `;
 
-        popup.setLngLat(coordinates).setHTML(html).addTo(map);
-      });
+          popup.setLngLat(coordinates).setHTML(html).addTo(map);
+        });
 
-      map.on('mouseleave', 'unclustered-point', () => {
-        map.getCanvas().style.cursor = '';
-        popup.remove();
+        map.on('mouseleave', layerId, () => {
+          map.getCanvas().style.cursor = '';
+          popup.remove();
+        });
       });
 
       // Hover on clusters
-      map.on('mouseenter', 'clusters', (e) => {
-        map.getCanvas().style.cursor = 'pointer';
-        if (!e.features || !e.features[0]) return;
-        const coordinates = (e.features[0].geometry as any).coordinates.slice();
-        const p = e.features[0].properties as any;
+      clusterClickLayers.forEach((layerId) => {
+        map.on('mouseenter', layerId, (e) => {
+          map.getCanvas().style.cursor = 'pointer';
+          if (!e.features || !e.features[0]) return;
+          const coordinates = (e.features[0].geometry as any).coordinates.slice();
+          const p = e.features[0].properties as any;
 
-        const clusterHtml = `
-          <div style="font-family: monospace; font-size: 10.5px; line-height: 1.4;">
-            <div style="font-weight: bold; color: #38bdf8;">THERMAL CORRIDOR</div>
-            <div style="color: #94a3b8; font-size: 9.5px;">Total Dissipation Points: <span style="color: #ffffff; font-weight: bold;">${p.point_count}</span></div>
-            <div style="color: #34d399; font-size: 9px; margin-top: 2px;">Click to zoom into cluster micro-sites</div>
-          </div>
-        `;
-        popup.setLngLat(coordinates).setHTML(clusterHtml).addTo(map);
-      });
+          const clusterHtml = `
+            <div style="font-family: monospace; font-size: 10.5px; line-height: 1.4;">
+              <div style="font-weight: bold; color: #38bdf8;">THERMAL CORRIDOR</div>
+              <div style="color: #94a3b8; font-size: 9.5px;">Total Dissipation Points: <span style="color: #ffffff; font-weight: bold;">${p.point_count}</span></div>
+              <div style="color: #34d399; font-size: 9px; margin-top: 2px;">Click to zoom into cluster micro-sites</div>
+            </div>
+          `;
+          popup.setLngLat(coordinates).setHTML(clusterHtml).addTo(map);
+        });
 
-      map.on('mouseleave', 'clusters', () => {
-        map.getCanvas().style.cursor = '';
-        popup.remove();
+        map.on('mouseleave', layerId, () => {
+          map.getCanvas().style.cursor = '';
+          popup.remove();
+        });
       });
 
       // Hover on satellites
@@ -722,17 +849,38 @@ export const MapContainer: React.FC<MapContainerProps> = ({
     });
   };
 
-  // 4. Focus coordinates when selecting from alert rail
+  // 4. Focus coordinates when selecting from alert rail or drawer
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !focusedCoordinates) return;
-    map.flyTo({
-      center: focusedCoordinates,
-      zoom: 11,
-      pitch: is3D ? 50 : 0,
-      duration: 1400
-    });
-  }, [focusedCoordinates, is3D]);
+    if (!map) return;
+
+    if (focusedCoordinates && focusedCoordinates.length >= 2) {
+      map.flyTo({
+        center: focusedCoordinates,
+        zoom: 13.5,
+        pitch: is3D ? 52 : map.getPitch(),
+        duration: 1200
+      });
+      return;
+    }
+
+    if (selectedSiteId && sitesData) {
+      const siteFeature = sitesData.features.find(f => f.properties.site_id === selectedSiteId);
+      if (siteFeature?.geometry?.coordinates) {
+        const [lon, lat] = siteFeature.geometry.coordinates;
+        const center = map.getCenter();
+        const dist = Math.hypot(center.lng - lon, center.lat - lat);
+        if (dist > 0.002 || map.getZoom() < 12) {
+          map.flyTo({
+            center: [lon, lat],
+            zoom: Math.max(map.getZoom(), 13.5),
+            pitch: is3D ? 52 : map.getPitch(),
+            duration: 1000
+          });
+        }
+      }
+    }
+  }, [focusedCoordinates, selectedSiteId, sitesData, is3D]);
 
   // 5. Update GeoJSON Source & deck.gl 3D Volumetric Thermal Columns
   useEffect(() => {
@@ -808,7 +956,17 @@ export const MapContainer: React.FC<MapContainerProps> = ({
             lineWidthMinPixels: 1.5,
             onClick: (info) => {
               if (info.object) {
-                onSelectSiteRef.current((info.object as SiteGeoJSONFeature).properties.site_id);
+                const siteObj = info.object as SiteGeoJSONFeature;
+                onSelectSiteRef.current(siteObj.properties.site_id);
+                const coords = siteObj.geometry.coordinates as [number, number];
+                if (coords && coords.length >= 2) {
+                  map.flyTo({
+                    center: coords,
+                    zoom: Math.max(map.getZoom(), 13.5),
+                    pitch: is3D ? 55 : map.getPitch(),
+                    duration: 900
+                  });
+                }
               }
             }
           });

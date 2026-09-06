@@ -136,7 +136,12 @@ export default function App() {
 
     fetchSiteDetail(selectedSiteId)
       .then((detail) => {
-        if (active) setSelectedSite(detail);
+        if (active) {
+          setSelectedSite(detail);
+          if (detail.longitude !== undefined && detail.latitude !== undefined) {
+            setFocusedCoordinates([detail.longitude, detail.latitude]);
+          }
+        }
       })
       .catch((err) => {
         console.error(`Failed to fetch site ${selectedSiteId}:`, err);
