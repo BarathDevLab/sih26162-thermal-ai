@@ -39,9 +39,22 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Database pre-flight connection check failed: {e}")
 
+    # Start APScheduler and Prithvi background worker queue
+    try:
+        from backend.app.services.scheduler import start_scheduler, stop_scheduler
+        start_scheduler()
+    except Exception as e:
+        logger.warning(f"Failed to start APScheduler in lifespan: {e}")
+
     yield
 
     logger.info("Shutting down SIH26162 Thermal AI Platform...")
+    try:
+        from backend.app.services.scheduler import stop_scheduler
+        stop_scheduler()
+    except Exception as e:
+        logger.warning(f"Failed to stop scheduler: {e}")
+
     engine.dispose()
     logger.info("Database connection pool disposed.")
 
