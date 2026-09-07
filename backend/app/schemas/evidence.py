@@ -27,11 +27,17 @@ class SiteEvidenceResponse(BaseModel):
 
 
 class ImageryCacheSummary(BaseModel):
+    cache_id: str
     site_id: str
     acquisition_date: str
-    product: str
+    product: str = "HLSS30"
     cloud_fraction: Optional[float] = None
     prithvi_probability: Optional[float] = None
     status: str = "AVAILABLE"
     patch_uri: Optional[str] = None
+    patch_base64: Optional[str] = None
     embedding_uri: Optional[str] = None
+    visual_class: Optional[str] = None
+    bands_mean: Optional[Dict[str, float]] = None
+    morphology_summary: Optional[str] = None
+    rescue_decision: Optional[str] = None

@@ -2,10 +2,12 @@
 Facility Evidence & Satellite Imagery API Endpoints
 """
 
+import os
 import math
 import logging
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from backend.app.db.session import get_db
@@ -15,6 +17,7 @@ from backend.app.schemas.evidence import (
     FacilityEvidenceSummary,
     ImageryCacheSummary
 )
+from backend.app.services.imagery_service import get_or_create_site_imagery, CACHE_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -104,24 +107,29 @@ def get_site_evidence(
 def get_site_imagery(site_id: str, db: Session = Depends(get_db)):
     """
     Returns metadata for cached HLS satellite scenes and Prithvi embeddings.
+    If no imagery is cached yet, generates/fetches it on demand.
     """
     site = db.query(SourceSite).filter(SourceSite.site_id == site_id).first()
     if not site:
         raise HTTPException(status_code=404, detail=f"Source site '{site_id}' not found.")
 
-    records = db.query(ImageryCache).filter(ImageryCache.site_id == site_id).all()
-    results: List[ImageryCacheSummary] = []
-    for r in records:
-        results.append(
-            ImageryCacheSummary(
-                site_id=r.site_id,
-                acquisition_date=str(r.acquisition_date),
-                product=r.product or "HLS.L30/S30",
-                cloud_fraction=float(r.cloud_fraction) if r.cloud_fraction is not None else None,
-                prithvi_probability=float(r.prithvi_probability) if r.prithvi_probability is not None else None,
-                status=r.status or "AVAILABLE",
-                patch_uri=r.patch_uri,
-                embedding_uri=r.embedding_uri
-            )
-        )
-    return results
+    try:
+        summary = get_or_create_site_imagery(db, site_id)
+        return [summary]
+    except Exception as e:
+        logger.error(f"Error getting/generating imagery for site '{site_id}': {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch satellite imagery: {str(e)}")
+
+
+@router.get(
+    "/imagery/patches/{filename}",
+    summary="Serve cached satellite patch image"
+)
+def get_satellite_patch_file(filename: str):
+    """
+    Returns the binary satellite patch PNG for visual display in the UI.
+    """
+    file_path = os.path.join(CACHE_DIR, filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail=f"Satellite patch '{filename}' not found.")
+    return FileResponse(file_path, media_type="image/png")

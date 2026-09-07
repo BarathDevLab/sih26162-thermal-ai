@@ -5,7 +5,10 @@ import {
   Satellite,
   Table,
   ExternalLink,
-  MapPin
+  MapPin,
+  Eye,
+  Sparkles,
+  ShieldCheck
 } from 'lucide-react';
 import {
   ModelAIcon,
@@ -71,6 +74,11 @@ export const SiteDrawer: React.FC<SiteDrawerProps> = ({ site, onClose }) => {
   }, [siteId]);
 
   if (!site) return null;
+
+  const activePrithviProb = site.model_a?.prithvi_probability ?? (imageryData[0]?.prithvi_probability ?? null);
+  const activePrithviStatus = (site.model_a?.prithvi_status && site.model_a.prithvi_status !== 'NOT_TRIGGERED')
+    ? site.model_a.prithvi_status
+    : (imageryData[0]?.status && imageryData[0].status !== 'PENDING' ? imageryData[0].status : (activePrithviProb !== null ? 'EVALUATED' : 'NOT_TRIGGERED'));
 
   return (
     <aside className="w-[460px] bg-[#070a12]/95 border-l border-white/10 flex flex-col h-full z-20 shrink-0 text-xs overflow-hidden select-none backdrop-blur tactical-glass shadow-2xl">
@@ -185,18 +193,33 @@ export const SiteDrawer: React.FC<SiteDrawerProps> = ({ site, onClose }) => {
               </div>
               <div className="grid grid-cols-2 gap-2 text-[11px] pt-1.5 border-t border-white/5 font-mono">
                 <div>
-                  <span className="text-slate-400 text-[10px]">Core Probability:</span>
+                  <span className="text-slate-400 text-[10px]">A-Core Probability:</span>
                   <div className="font-bold text-slate-100 mt-0.5 text-xs">
                     {site.model_a?.core_probability ? `${(site.model_a.core_probability * 100).toFixed(1)}%` : 'N/A'}
                   </div>
                 </div>
                 <div>
-                  <span className="text-slate-400 text-[10px]">Prithvi Rescue:</span>
-                  <div className="font-bold text-slate-100 mt-0.5 text-xs">
-                    {site.model_a?.prithvi_status || 'NOT_TRIGGERED'}
+                  <span className="text-slate-400 text-[10px]">Prithvi Visual Score:</span>
+                  <div className="font-bold text-cyan-300 mt-0.5 text-xs flex items-center gap-1.5">
+                    <span>{activePrithviProb !== null ? `${(activePrithviProb * 100).toFixed(1)}%` : 'EVALUATING...'}</span>
+                    <span className={`text-[8.5px] px-1 py-0.5 rounded font-mono font-normal border ${
+                      activePrithviStatus === 'RESCUED' ? 'bg-amber-500/20 text-amber-300 border-amber-500/40' :
+                      activePrithviStatus === 'CONFIRMED' ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' :
+                      activePrithviStatus === 'EVALUATED' ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40' :
+                      'bg-slate-500/20 text-slate-400 border-slate-500/40'
+                    }`}>
+                      {activePrithviStatus}
+                    </span>
                   </div>
                 </div>
               </div>
+              <button
+                onClick={() => setActiveTab('SATELLITE')}
+                className="w-full mt-1.5 py-1.5 px-2 rounded bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 text-[10px] font-mono flex items-center justify-center gap-1.5 transition-colors"
+              >
+                <Eye className="w-3 h-3 text-cyan-400" />
+                <span>Inspect Satellite Photo & Prithvi Breakdown ➔</span>
+              </button>
             </div>
 
             {/* Model B Intelligence Card */}
@@ -445,40 +468,168 @@ export const SiteDrawer: React.FC<SiteDrawerProps> = ({ site, onClose }) => {
 
         {/* TAB 4: SATELLITE IMAGERY */}
         {activeTab === 'SATELLITE' && (
-          <div className="space-y-3">
-            <span className="font-bold text-slate-200 text-xs block">
-              HLS SCENES & PRITHVI VISUAL EMBEDDINGS
-            </span>
+          <div className="space-y-3 font-mono">
+            <div className="flex items-center justify-between border-b border-white/10 pb-2">
+              <span className="font-bold text-slate-200 text-xs flex items-center gap-1.5">
+                <Satellite className="w-3.5 h-3.5 text-cyan-400" />
+                SATELLITE OPTICAL & PRITHVI FOUNDATION
+              </span>
+              <span className="text-[10px] text-cyan-300 font-bold px-1.5 py-0.5 rounded bg-cyan-500/10 border border-cyan-500/30">
+                224×224 px HLS
+              </span>
+            </div>
 
             {imageryData.length > 0 ? (
-              <div className="space-y-2">
+              <div className="space-y-3">
                 {imageryData.map((img) => (
-                  <div key={img.cache_id} className="p-3 rounded bg-[#0b1120] border border-white/10 space-y-1.5 font-mono">
-                    <div className="flex justify-between items-center">
-                      <span className="text-slate-300 font-bold">{img.scene_id}</span>
-                      <span className="text-slate-400 text-[10px]">{img.capture_date}</span>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2 text-[10px] pt-1 border-t border-white/5">
-                      <div>
-                        <span className="text-slate-500">Cloud Cover:</span>
-                        <span className="text-slate-300 ml-1">{img.cloud_cover !== null ? `${img.cloud_cover}%` : 'N/A'}</span>
+                  <div key={img.cache_id} className="space-y-3">
+                    {/* 1. Real Optical Satellite Patch with Tactical Targeting Reticle */}
+                    <div className="relative rounded-lg overflow-hidden border border-cyan-500/30 bg-black shadow-2xl group">
+                      {img.patch_base64 || img.patch_uri ? (
+                        <img
+                          src={img.patch_base64 || `${img.patch_uri}`}
+                          alt="Satellite Patch"
+                          className="w-full aspect-square object-cover transition-transform duration-500 group-hover:scale-105"
+                        />
+                      ) : (
+                        <div className="w-full aspect-square bg-[#0c1220] flex items-center justify-center text-slate-500 text-xs">
+                          NO IMAGE RASTER AVAILABLE
+                        </div>
+                      )}
+
+                      {/* Tactical HUD Reticle Overlay */}
+                      <div className="absolute inset-0 pointer-events-none flex flex-col justify-between p-2">
+                        {/* Top HUD bar */}
+                        <div className="flex justify-between items-center text-[9px] bg-black/75 px-2 py-0.5 rounded backdrop-blur border border-white/10">
+                          <span className="text-cyan-300 font-bold">ESRI SATELLITE / HLS</span>
+                          <span className="text-slate-400">{img.acquisition_date}</span>
+                        </div>
+
+                        {/* Center Target Reticle */}
+                        <div className="absolute inset-0 flex items-center justify-center">
+                          {/* 750m resolution footprint circle */}
+                          <div className="w-36 h-36 rounded-full border border-cyan-400/60 border-dashed animate-[spin_30s_linear_infinite]" />
+                          <div className="absolute w-44 h-44 rounded-full border border-cyan-500/20" />
+                          {/* Center crosshair */}
+                          <div className="absolute w-6 h-[1px] bg-cyan-400" />
+                          <div className="absolute h-6 w-[1px] bg-cyan-400" />
+                          <div className="absolute w-2 h-2 rounded-full bg-red-500 shadow-[0_0_8px_#ef4444]" />
+                        </div>
+
+                        {/* Bottom HUD bar */}
+                        <div className="flex justify-between items-center text-[9px] bg-black/75 px-2 py-0.5 rounded backdrop-blur border border-white/10">
+                          <span className="text-slate-400">
+                            CLOUDS: {img.cloud_fraction !== null ? `${(img.cloud_fraction * 100).toFixed(1)}%` : '0.0%'}
+                          </span>
+                          <span className="text-amber-400 font-bold">
+                            750m RESOLVER CENTROID
+                          </span>
+                        </div>
                       </div>
-                      <div>
-                        <span className="text-slate-500">Prithvi Score:</span>
-                        <span className="text-cyan-300 ml-1 font-bold">
-                          {img.prithvi_score !== null ? (img.prithvi_score * 100).toFixed(1) + '%' : 'N/A'}
+                    </div>
+
+                    {/* 2. Prithvi Foundation Model Score Card */}
+                    <div className="p-3 rounded-lg bg-[#0b1120] border border-white/10 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-bold text-slate-200 flex items-center gap-1.5 uppercase">
+                          <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                          Prithvi-EO-2.0 (300M)
+                        </span>
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
+                          (img.prithvi_probability ?? 0) >= 0.90
+                            ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                            : (img.prithvi_probability ?? 0) >= 0.60
+                            ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40'
+                            : 'bg-slate-500/20 text-slate-300 border-slate-500/40'
+                        }`}>
+                          {img.visual_class || 'EVALUATED'}
                         </span>
                       </div>
+
+                      {/* Visual Probability Bar */}
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-[10px]">
+                          <span className="text-slate-400">Visual Industrial Probability:</span>
+                          <span className="text-cyan-300 font-bold text-xs">
+                            {img.prithvi_probability !== null ? `${(img.prithvi_probability * 100).toFixed(1)}%` : 'N/A'}
+                          </span>
+                        </div>
+                        <div className="h-2 w-full bg-slate-800 rounded-full overflow-hidden border border-white/5">
+                          <div
+                            className="h-full bg-gradient-to-r from-cyan-500 via-sky-400 to-amber-400 transition-all duration-700"
+                            style={{ width: `${(img.prithvi_probability ?? 0) * 100}%` }}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Morphology text */}
+                      {img.morphology_summary && (
+                        <div className="text-[10px] text-slate-300 pt-1 leading-relaxed bg-black/30 p-2 rounded border border-white/5">
+                          <span className="text-cyan-400 font-bold block mb-0.5">VISUAL MORPHOLOGY:</span>
+                          {img.morphology_summary}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 3. 6 HLS Spectral Bands Breakdown */}
+                    {img.bands_mean && (
+                      <div className="p-3 rounded-lg bg-[#0b1120] border border-white/10 space-y-2">
+                        <div className="flex justify-between items-center text-[10px] text-slate-300 font-bold border-b border-white/5 pb-1">
+                          <span>SPECTRAL REFLECTANCE (HLS 6-BAND)</span>
+                          <span className="text-slate-500">REFLECTANCE (0-10k)</span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 text-[10px]">
+                          {Object.entries(img.bands_mean).map(([bandKey, val]) => (
+                            <div key={bandKey} className="p-1.5 rounded bg-black/40 border border-white/5 space-y-0.5">
+                              <div className="flex justify-between text-[9px]">
+                                <span className={
+                                  bandKey.includes('SWIR') ? 'text-amber-300 font-bold' :
+                                  bandKey.includes('NIR') ? 'text-emerald-300 font-bold' :
+                                  'text-cyan-300'
+                                }>
+                                  {bandKey.replace('_', ' ')}
+                                </span>
+                                <span className="text-slate-300 font-bold">{val}</span>
+                              </div>
+                              <div className="h-1 w-full bg-slate-800 rounded-full overflow-hidden">
+                                <div
+                                  className={`h-full ${
+                                    bandKey.includes('SWIR') ? 'bg-amber-400' :
+                                    bandKey.includes('NIR') ? 'bg-emerald-400' :
+                                    'bg-cyan-400'
+                                  }`}
+                                  style={{ width: `${Math.min(100, (val / 8000) * 100)}%` }}
+                                />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 4. Guarded Decision Fusion Provenance */}
+                    <div className="p-2.5 rounded bg-cyan-950/20 border border-cyan-500/30 text-[10px] space-y-1">
+                      <div className="flex items-center gap-1.5 text-cyan-300 font-bold">
+                        <ShieldCheck className="w-3.5 h-3.5 text-cyan-400" />
+                        <span>GUARDED DECISION PROVENANCE</span>
+                      </div>
+                      <p className="text-slate-300 leading-relaxed">
+                        {(site.model_a?.core_probability ?? 0) >= 0.885
+                          ? `A-Core confirmed industrial (${((site.model_a?.core_probability ?? 0) * 100).toFixed(1)}%). Prithvi visual score (${((img.prithvi_probability ?? 0) * 100).toFixed(1)}%) corroborates facility presence without veto authority.`
+                          : (site.model_a?.core_probability ?? 0) >= 0.405
+                          ? (img.prithvi_probability ?? 0) >= 0.965
+                            ? `A-Core was uncertain (${((site.model_a?.core_probability ?? 0) * 100).toFixed(1)}%). Prithvi high visual confidence (${((img.prithvi_probability ?? 0) * 100).toFixed(1)}% ≥ 96.5%) triggered guarded industrial rescue.`
+                            : `A-Core is uncertain (${((site.model_a?.core_probability ?? 0) * 100).toFixed(1)}%). Prithvi visual score (${((img.prithvi_probability ?? 0) * 100).toFixed(1)}%) is below the 96.5% rescue threshold; site remains in UNKNOWN review queue.`
+                          : `A-Core confirmed non-industrial (${((site.model_a?.core_probability ?? 0) * 100).toFixed(1)}%). Visual morphology corroborates non-industrial terrain.`}
+                      </p>
                     </div>
                   </div>
                 ))}
               </div>
             ) : (
-              <div className="p-8 text-center text-slate-500 font-mono">
-                No cached HLS satellite scenes for this site coordinates.
-                <div className="text-[10px] text-slate-600 mt-1">
-                  (A-Core operates independently of optical HLS coverage).
-                </div>
+              <div className="p-8 text-center text-slate-500">
+                <Satellite className="w-8 h-8 text-slate-600 mx-auto mb-2 animate-spin" />
+                <div>Fetching satellite patch & Prithvi embeddings...</div>
               </div>
             )}
           </div>

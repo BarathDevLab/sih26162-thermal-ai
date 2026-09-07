@@ -173,12 +173,18 @@ export interface SiteEvidenceResponse {
 export interface ImageryCacheSummary {
   cache_id: string;
   site_id: string;
-  scene_id: string;
-  capture_date: string;
-  cloud_cover: number | null;
-  bands_available: string[] | null;
-  prithvi_score: number | null;
+  acquisition_date: string;
+  product: string;
+  cloud_fraction: number | null;
+  prithvi_probability: number | null;
+  status: string;
+  patch_uri: string | null;
+  patch_base64: string | null;
+  embedding_uri: string | null;
   visual_class: string | null;
+  bands_mean: Record<string, number> | null;
+  morphology_summary: string | null;
+  rescue_decision: string | null;
 }
 
 export interface AlertItem {
