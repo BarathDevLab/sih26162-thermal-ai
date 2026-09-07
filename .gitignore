@@ -40,6 +40,7 @@ wheels/
 *.key
 
 # Model weight binaries / huge data artifacts
+
 data/
 *.joblib
 *.pt
