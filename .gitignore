@@ -41,7 +41,7 @@ wheels/
 
 # Model weight binaries / huge data artifacts
 
-data/
+data/cache/
 *.joblib
 *.pt
 *.pth
