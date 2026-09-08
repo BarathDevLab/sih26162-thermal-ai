@@ -91,13 +91,15 @@ class FirmsClient:
         """
         Fetches active fire detection records from FIRMS Area API as a list of raw dicts.
         """
-        if self.offline_mode or not self.map_key:
-            logger.info("FirmsClient running in offline mode or without FIRMS_MAP_KEY.")
+        if self.offline_mode:
+            logger.info("FirmsClient running in explicit offline mode.")
             if self.cache_dir:
                 cached = self._read_cache(source, bbox or self.default_bbox, day_range, date)
                 if cached is not None:
                     return cached
             return []
+        if not self.map_key:
+            raise RuntimeError("FIRMS_MAP_KEY is required outside explicit offline mode.")
 
         url = self.build_area_url(source=source, bbox=bbox, day_range=day_range, date=date)
         

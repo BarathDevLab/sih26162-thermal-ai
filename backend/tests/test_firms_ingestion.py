@@ -5,7 +5,12 @@ Verifies normalization, deterministic SHA-256 hashing, batch deduplication, spat
 
 import pandas as pd
 import pytest
-from backend.app.services.firms_ingestion import FirmsIngestionService
+from backend.app.services.firms_ingestion import FirmsIngestionService, normalize_acq_time
+
+
+def test_archive_float_acquisition_time_normalization():
+    assert normalize_acq_time(621.0) == "0621"
+    assert normalize_acq_time("35") == "0035"
 from backend.app.engines.source_resolver import SourceResolver
 
 

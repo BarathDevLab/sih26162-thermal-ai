@@ -6,6 +6,7 @@ performs deduplication, resolves spatial locations via SourceResolver, and aggre
 
 import hashlib
 import logging
+from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 import pandas as pd
 import numpy as np
@@ -13,6 +14,16 @@ import numpy as np
 from backend.app.engines.source_resolver import SourceResolver
 
 logger = logging.getLogger(__name__)
+
+
+def normalize_acq_time(value: Any) -> str:
+    """Normalize FIRMS CSV/Parquet time values, including pandas float coercion."""
+    if value is None or (not isinstance(value, str) and pd.isna(value)):
+        return "0000"
+    text = str(value).strip()
+    if text.endswith(".0") and text[:-2].isdigit():
+        text = text[:-2]
+    return text.zfill(4)
 
 
 class FirmsIngestionService:
@@ -38,7 +49,7 @@ class FirmsIngestionService:
         """
         clean_lat = f"{round(float(latitude), 4):.4f}"
         clean_lon = f"{round(float(longitude), 4):.4f}"
-        clean_time = str(acq_time).strip().zfill(4)
+        clean_time = normalize_acq_time(acq_time)
         clean_date = str(acq_date).strip()
         clean_sat = str(satellite).strip()
         clean_sensor = str(source_sensor).strip()
@@ -54,15 +65,26 @@ class FirmsIngestionService:
         """
         Normalizes a single FIRMS detection row into typed, standardized schema.
         """
-        lat = float(raw_row.get("latitude", 0.0))
-        lon = float(raw_row.get("longitude", 0.0))
+        if raw_row.get("latitude") in (None, "") or raw_row.get("longitude") in (None, ""):
+            raise ValueError("FIRMS detection requires latitude and longitude.")
+        lat = float(raw_row["latitude"])
+        lon = float(raw_row["longitude"])
+        if not -90.0 <= lat <= 90.0 or not -180.0 <= lon <= 180.0:
+            raise ValueError(f"Invalid FIRMS coordinates: ({lat}, {lon})")
         acq_date = str(raw_row.get("acq_date", "")).strip()
-        acq_time = str(raw_row.get("acq_time", "0000")).strip().zfill(4)
+        acq_time = normalize_acq_time(raw_row.get("acq_time", "0000"))
+        try:
+            datetime.strptime(acq_date, "%Y-%m-%d")
+            datetime.strptime(acq_time, "%H%M")
+        except ValueError as exc:
+            raise ValueError(f"Invalid FIRMS acquisition date/time: {acq_date} {acq_time}") from exc
         satellite = str(raw_row.get("satellite", "20")).strip()
         instrument = str(raw_row.get("instrument", "VIIRS")).strip()
         confidence = str(raw_row.get("confidence", "nominal")).strip().lower()
         version = str(raw_row.get("version", "2.0NRT")).strip()
         daynight = str(raw_row.get("daynight", "D")).strip().upper()
+        if daynight not in {"D", "N"}:
+            raise ValueError(f"Invalid FIRMS daynight value: {daynight}")
 
         # Numeric fields with safe float conversion
         def safe_float(val: Any, default: Optional[float] = None) -> Optional[float]:
@@ -144,6 +166,7 @@ class FirmsIngestionService:
         candidate_count = 0
         promoted_count = 0
         promoted_sites: List[Dict[str, Any]] = []
+        promoted_members: Dict[str, str] = {}
 
         for det in normalized_detections:
             res = resolver.resolve_detection(
@@ -165,6 +188,9 @@ class FirmsIngestionService:
                 det["site_id"] = res["site_id"]
                 promoted_count += 1
                 promoted_sites.append(res)
+                for member in res.get("member_detections", []):
+                    if member.get("detection_id"):
+                        promoted_members[member["detection_id"]] = res["site_id"]
             elif res["status"] in ("NEW_CANDIDATE", "CANDIDATE_ACCUMULATED"):
                 det["site_id"] = None
                 det["candidate_id"] = res.get("candidate_id")
@@ -173,6 +199,14 @@ class FirmsIngestionService:
                 det["site_id"] = None
 
             resolved_detections.append(det)
+
+        # Promotion is transactional membership: all candidate members, including
+        # earlier records in this batch, immediately belong to the new site.
+        for det in resolved_detections:
+            promoted_site_id = promoted_members.get(det["detection_id"])
+            if promoted_site_id:
+                det["site_id"] = promoted_site_id
+                det["resolution_status"] = "PROMOTED_MEMBER"
 
         return {
             "processed_count": len(raw_records),

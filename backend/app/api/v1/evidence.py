@@ -5,19 +5,23 @@ Facility Evidence & Satellite Imagery API Endpoints
 import os
 import math
 import logging
-from typing import List
+from datetime import date, datetime, time, timedelta, timezone
+from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from backend.app.db.session import get_db
-from backend.app.db.models import SourceSite, FacilityEvidence, ImageryCache
+from backend.app.db.models import SourceSite, FacilityEvidence, EventEvidence, SiteModelA
 from backend.app.schemas.evidence import (
     SiteEvidenceResponse,
     FacilityEvidenceSummary,
+    EventEvidenceSummary,
     ImageryCacheSummary
 )
-from backend.app.services.imagery_service import get_or_create_site_imagery, CACHE_DIR
+from backend.app.services.imagery_service import get_site_imagery_cache, CACHE_DIR
+from backend.app.services.prithvi_queue import enqueue_site_for_prithvi
+from backend.app.services.stack_readiness import get_shared_model_a
 
 logger = logging.getLogger(__name__)
 
@@ -37,15 +41,17 @@ def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 @router.get(
     "/sites/{site_id}/evidence",
     response_model=SiteEvidenceResponse,
-    summary="Co-located GEM power plants, GFMR flaring, and ICAR crop burn evidence"
+    summary="Co-located persistent facilities and separately time-filtered event evidence"
 )
 def get_site_evidence(
     site_id: str,
     radius_m: float = Query(10000.0, ge=500.0, le=50000.0, description="Search radius around site in meters (default 10km)"),
+    as_of_date: Optional[date] = Query(None, description="Event-evidence temporal cutoff"),
+    temporal_window_days: int = Query(7, ge=0, le=90),
     db: Session = Depends(get_db)
 ):
     """
-    Returns verified external facility evidence located within specified radius of the site.
+    Returns persistent facility evidence and time-bound event evidence as distinct lists.
     """
     site = db.query(SourceSite).filter(SourceSite.site_id == site_id).first()
     if not site:
@@ -91,11 +97,54 @@ def get_site_evidence(
 
     matched.sort(key=lambda x: x.distance_m or 0.0)
 
+    cutoff = as_of_date or site.latest_seen or date.today()
+    window_start = datetime.combine(
+        cutoff - timedelta(days=temporal_window_days), time.min, tzinfo=timezone.utc
+    )
+    window_end = datetime.combine(
+        cutoff + timedelta(days=temporal_window_days), time.max, tzinfo=timezone.utc
+    )
+    event_candidates = (
+        db.query(EventEvidence)
+        .filter(
+            EventEvidence.latitude >= min_lat,
+            EventEvidence.latitude <= max_lat,
+            EventEvidence.longitude >= min_lon,
+            EventEvidence.longitude <= max_lon,
+            EventEvidence.event_start <= window_end,
+            (EventEvidence.event_end.is_(None)) | (EventEvidence.event_end >= window_start),
+        )
+        .all()
+    )
+    matched_events: List[EventEvidenceSummary] = []
+    for event in event_candidates:
+        distance = haversine_m(site_lat, site_lon, float(event.latitude), float(event.longitude))
+        if distance <= radius_m:
+            matched_events.append(EventEvidenceSummary(
+                evidence_id=event.evidence_id,
+                source_name=event.source_name,
+                evidence_type=event.evidence_type,
+                reference_id=event.reference_id,
+                latitude=float(event.latitude),
+                longitude=float(event.longitude),
+                distance_m=round(distance, 1),
+                event_start=event.event_start.isoformat() if event.event_start else None,
+                event_end=event.event_end.isoformat() if event.event_end else None,
+                authority_level=event.authority_level,
+                source_url=event.source_url,
+                attributes=event.attributes,
+            ))
+    matched_events.sort(key=lambda item: item.distance_m or 0.0)
+
     return SiteEvidenceResponse(
         site_id=site_id,
         search_radius_m=radius_m,
         total_evidence_count=len(matched),
-        evidence=matched
+        evidence=matched,
+        as_of_date=cutoff.isoformat(),
+        temporal_window_days=temporal_window_days,
+        total_event_evidence_count=len(matched_events),
+        event_evidence=matched_events,
     )
 
 
@@ -104,21 +153,33 @@ def get_site_evidence(
     response_model=List[ImageryCacheSummary],
     summary="Available HLS satellite patches and Prithvi embeddings"
 )
-def get_site_imagery(site_id: str, db: Session = Depends(get_db)):
+def get_site_imagery(
+    site_id: str,
+    as_of_date: Optional[date] = Query(None, description="Historical acquisition cutoff"),
+    db: Session = Depends(get_db),
+):
     """
-    Returns metadata for cached HLS satellite scenes and Prithvi embeddings.
-    If no imagery is cached yet, generates/fetches it on demand.
+    Returns metadata for genuine cached HLS/Prithvi evidence. If no cache exists,
+    the site is queued asynchronously and no probability is fabricated.
     """
     site = db.query(SourceSite).filter(SourceSite.site_id == site_id).first()
     if not site:
         raise HTTPException(status_code=404, detail=f"Source site '{site_id}' not found.")
 
     try:
-        summary = get_or_create_site_imagery(db, site_id)
-        return [summary]
+        summaries = get_site_imagery_cache(db, site_id)
+        if as_of_date is not None:
+            summaries = [item for item in summaries if item.acquisition_date <= as_of_date.isoformat()]
+        model_a = db.query(SiteModelA).filter_by(site_id=site_id).one_or_none()
+        prithvi_enabled = os.environ.get("PRITHVI_ENABLED", "false").lower() == "true"
+        if as_of_date is None and not summaries and prithvi_enabled and model_a is not None:
+            engine = get_shared_model_a()
+            if engine.thresh_low <= model_a.core_probability < engine.thresh_core:
+                enqueue_site_for_prithvi(site_id)
+        return summaries
     except Exception as e:
-        logger.error(f"Error getting/generating imagery for site '{site_id}': {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to fetch satellite imagery: {str(e)}")
+        logger.error(f"Error reading imagery status for site '{site_id}': {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to read imagery status: {str(e)}")
 
 
 @router.get(
@@ -129,7 +190,8 @@ def get_satellite_patch_file(filename: str):
     """
     Returns the binary satellite patch PNG for visual display in the UI.
     """
-    file_path = os.path.join(CACHE_DIR, filename)
-    if not os.path.exists(file_path):
+    cache_root = os.path.abspath(CACHE_DIR)
+    file_path = os.path.abspath(os.path.join(cache_root, filename))
+    if os.path.commonpath([cache_root, file_path]) != cache_root or not os.path.isfile(file_path):
         raise HTTPException(status_code=404, detail=f"Satellite patch '{filename}' not found.")
     return FileResponse(file_path, media_type="image/png")

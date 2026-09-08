@@ -8,8 +8,8 @@ from pydantic import BaseModel, Field
 
 class SiteCompactProperties(BaseModel):
     site_id: str = Field(..., description="Unique physical site ID")
-    a_class: str = Field(..., description="Model A identity: INDUSTRIAL, NONINDUSTRIAL, UNKNOWN")
-    a_prob: float = Field(..., description="Model A core industrial probability")
+    a_class: str = Field(..., description="Model A identity: INDUSTRIAL, NONINDUSTRIAL, UNKNOWN, or UNAVAILABLE")
+    a_prob: Optional[float] = Field(None, description="Model A core industrial probability")
     b_state: str = Field(..., description="Model B temporal state")
     c_status: str = Field(..., description="Model C anomaly status: NORMAL, ELEVATED, ANOMALOUS, CRITICAL, etc.")
     c_score: Optional[float] = Field(None, description="Model C anomaly score [0, 1]")
@@ -44,6 +44,10 @@ class ModelASummary(BaseModel):
     prithvi_probability: Optional[float] = None
     prithvi_status: str = "NOT_TRIGGERED"
     model_version: str
+    feature_version: Optional[str] = None
+    feature_as_of_detection_date: Optional[str] = None
+    imagery_acquisition_date: Optional[str] = None
+    computed_at: Optional[str] = None
 
 
 class ModelBSummary(BaseModel):

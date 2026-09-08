@@ -18,7 +18,8 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Text,
-    PrimaryKeyConstraint
+    PrimaryKeyConstraint,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 
@@ -41,6 +42,7 @@ class SourceSite(Base):
     land_cover = Column(JSON, nullable=True)  # WorldCover static fractions
     spatial_stats = Column(JSON, nullable=True)
     latest_seen = Column(Date, nullable=True, index=True)
+    feature_version = Column(String(64), nullable=True)
 
     # Relationships
     detections = relationship("FirmsDetection", back_populates="source_site")
@@ -79,6 +81,10 @@ class FirmsDetection(Base):
     version = Column(String(32), nullable=True)
     raw_payload = Column(JSON, nullable=True)
     ingested_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    resolution_status = Column(String(32), nullable=True, index=True)
+    is_ambiguous = Column(Boolean, nullable=False, default=False)
+    candidate_site_ids = Column(JSON, nullable=True)
+    assignment_distance_m = Column(Float, nullable=True)
 
     source_site_id = Column(String(64), ForeignKey("source_sites.site_id"), nullable=True, index=True)
     source_site = relationship("SourceSite", back_populates="detections")
@@ -106,6 +112,22 @@ class CandidateSource(Base):
 
     __table_args__ = (
         Index("idx_candidates_coords", "latitude", "longitude"),
+    )
+
+
+class CandidateSourceDetection(Base):
+    """Persistent candidate membership used by the incremental resolver."""
+    __tablename__ = "candidate_source_detections"
+
+    candidate_id = Column(String(64), ForeignKey("candidate_sources.candidate_id"), nullable=False)
+    detection_id = Column(String(64), ForeignKey("firms_detections.detection_id"), nullable=False)
+    latitude = Column(Float, nullable=False)
+    longitude = Column(Float, nullable=False)
+    observed_at = Column(DateTime, nullable=False)
+
+    __table_args__ = (
+        PrimaryKeyConstraint("candidate_id", "detection_id"),
+        Index("idx_candidate_members_coords", "latitude", "longitude"),
     )
 
 
@@ -144,9 +166,45 @@ class SiteModelA(Base):
     prithvi_probability = Column(Float, nullable=True)
     prithvi_status = Column(String(32), default="NOT_TRIGGERED")
     model_version = Column(String(32), nullable=False)
+    feature_version = Column(String(64), nullable=True)
+    feature_as_of_detection_date = Column(Date, nullable=True, index=True)
+    imagery_acquisition_date = Column(Date, nullable=True)
     computed_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     source_site = relationship("SourceSite", back_populates="model_a")
+
+
+class SiteModelAHistory(Base):
+    """Append-only Model A inference history for audit and replay."""
+    __tablename__ = "site_model_a_history"
+
+    inference_id = Column(String(64), primary_key=True)
+    site_id = Column(String(64), ForeignKey("source_sites.site_id"), nullable=False, index=True)
+    feature_as_of_detection_date = Column(Date, nullable=False, index=True)
+    core_probability = Column(Float, nullable=False)
+    class_name = Column(String(32), nullable=False, index=True)
+    decision = Column(String(64), nullable=False)
+    prithvi_probability = Column(Float, nullable=True)
+    prithvi_status = Column(String(32), nullable=False, default="NOT_TRIGGERED")
+    model_version = Column(String(64), nullable=False)
+    feature_version = Column(String(64), nullable=False)
+    imagery_acquisition_date = Column(Date, nullable=True)
+    computed_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    __table_args__ = (
+        Index("idx_model_a_history_cutoff", "site_id", "feature_as_of_detection_date"),
+    )
+
+
+class SiteModelAFeatures(Base):
+    """Latest exact ordered Model A feature vector and provenance."""
+    __tablename__ = "site_model_a_features"
+
+    site_id = Column(String(64), ForeignKey("source_sites.site_id"), primary_key=True)
+    feature_as_of_detection_date = Column(Date, nullable=False, index=True)
+    feature_version = Column(String(64), nullable=False)
+    ordered_features = Column(JSON, nullable=False)
+    computed_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
 
 class SiteModelB(Base):
@@ -165,6 +223,26 @@ class SiteModelB(Base):
     computed_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     source_site = relationship("SourceSite", back_populates="model_b")
+
+
+class SiteModelBHistory(Base):
+    """Materialized Model B state by as-of date for deterministic replay."""
+    __tablename__ = "site_model_b_history"
+
+    site_id = Column(String(64), ForeignKey("source_sites.site_id"), nullable=False)
+    as_of_date = Column(Date, nullable=False)
+    state = Column(String(32), nullable=False, index=True)
+    confidence = Column(String(16), nullable=False)
+    reason = Column(Text, nullable=True)
+    days_since_last = Column(Integer, nullable=True)
+    active_days_windows = Column(JSON, nullable=True)
+    model_version = Column(String(64), nullable=False)
+    computed_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    __table_args__ = (
+        PrimaryKeyConstraint("site_id", "as_of_date"),
+        Index("idx_model_b_history_cutoff", "site_id", "as_of_date"),
+    )
 
 
 class SiteModelC(Base):
@@ -205,6 +283,7 @@ class SiteDailyInference(Base):
     drivers = Column(JSON, nullable=True)
     model_c_version = Column(String(32), nullable=False)
     model_b_state = Column(String(32), nullable=True)
+    raw_signals = Column(JSON, nullable=True)
     computed_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (
@@ -265,6 +344,46 @@ class FacilityEvidence(Base):
     )
 
 
+class EventEvidence(Base):
+    """Time-bound external fire/crop-burn evidence, separate from facilities."""
+    __tablename__ = "event_evidence"
+
+    evidence_id = Column(String(64), primary_key=True, index=True)
+    source_name = Column(String(64), nullable=False, index=True)
+    evidence_type = Column(String(64), nullable=False, index=True)
+    reference_id = Column(String(128), nullable=True)
+    latitude = Column(Float, nullable=False)
+    longitude = Column(Float, nullable=False)
+    event_start = Column(DateTime, nullable=True, index=True)
+    event_end = Column(DateTime, nullable=True)
+    observed_at = Column(DateTime, nullable=True)
+    retrieved_at = Column(DateTime, nullable=True)
+    source_version = Column(String(64), nullable=True)
+    coordinate_quality = Column(String(32), nullable=True)
+    temporal_quality = Column(String(32), nullable=True)
+    authority_level = Column(String(32), nullable=True)
+    source_url = Column(String(512), nullable=True)
+    attributes = Column(JSON, nullable=True)
+
+    __table_args__ = (
+        Index("idx_event_evidence_coords", "latitude", "longitude"),
+        Index("idx_event_evidence_time", "event_start", "event_end"),
+    )
+
+
+class SiteReferenceLabel(Base):
+    """Research/reference truth kept strictly separate from runtime inference."""
+    __tablename__ = "site_reference_labels"
+
+    site_id = Column(String(64), ForeignKey("source_sites.site_id"), primary_key=True)
+    reference_class = Column(String(32), nullable=False, index=True)
+    label_tier = Column(String(32), nullable=True)
+    industrial_source = Column(String(255), nullable=True)
+    nonindustrial_source = Column(String(255), nullable=True)
+    evidence_metadata = Column(JSON, nullable=True)
+    frozen_reference_version = Column(String(64), nullable=False)
+
+
 class ImageryCache(Base):
     """
     Cached HLS satellite scene metadata and Prithvi embeddings.
@@ -276,10 +395,13 @@ class ImageryCache(Base):
     acquisition_date = Column(Date, nullable=False, index=True)
     hls_product = Column(String(32), default="HLSS30")
     cloud_fraction = Column(Float, nullable=True)
+    source_uri = Column(String(1024), nullable=True)
     patch_uri = Column(String(512), nullable=True)
     embedding_uri = Column(String(512), nullable=True)
     prithvi_probability = Column(Float, nullable=True)
-    status = Column(String(32), default="PENDING")  # PENDING, CACHED, FAILED, REJECTED_CLOUD
+    model_revision = Column(String(128), nullable=True)
+    failure_reason = Column(Text, nullable=True)
+    status = Column(String(32), default="PENDING")
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
@@ -295,6 +417,27 @@ class ModelVersion(Base):
     config = Column(JSON, nullable=True)
     activated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     is_active = Column(Boolean, default=True)
+
+
+class StackSnapshot(Base):
+    """Atomic runtime readiness record shared by current A/B/C materializations."""
+    __tablename__ = "stack_snapshots"
+
+    snapshot_id = Column(String(64), primary_key=True)
+    model_stack_version = Column(String(64), nullable=False, index=True)
+    data_through_date = Column(Date, nullable=False, index=True)
+    primary_firms_source = Column(String(64), nullable=False)
+    a_core_artifact_sha256 = Column(String(64), nullable=False)
+    c_artifact_sha256 = Column(String(64), nullable=False)
+    feature_version = Column(String(64), nullable=False)
+    resolver_version = Column(String(64), nullable=False)
+    backfill_completed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    status = Column(String(32), nullable=False, index=True)
+
+    __table_args__ = (
+        UniqueConstraint("model_stack_version", "data_through_date", name="uq_stack_snapshot_version_date"),
+    )
 
 
 class IngestionRun(Base):
@@ -313,3 +456,23 @@ class IngestionRun(Base):
     failed = Column(Integer, default=0)
     status = Column(String(32), default="RUNNING")  # RUNNING, COMPLETED, FAILED
     error_summary = Column(Text, nullable=True)
+
+
+class FirmsBackfillWindow(Base):
+    """Auditable proof that a requested FIRMS window was fetched and processed."""
+    __tablename__ = "firms_backfill_windows"
+
+    source_sensor = Column(String(64), nullable=False)
+    bbox = Column(String(64), nullable=False)
+    window_start = Column(Date, nullable=False)
+    window_end = Column(Date, nullable=False)
+    records_fetched = Column(Integer, nullable=False)
+    payload_sha256 = Column(String(64), nullable=False)
+    fetch_mode = Column(String(16), nullable=False)
+    status = Column(String(32), nullable=False, index=True)
+    completed_at = Column(DateTime, nullable=False)
+
+    __table_args__ = (
+        PrimaryKeyConstraint("source_sensor", "bbox", "window_start", "window_end"),
+        Index("idx_backfill_windows_completion", "status", "window_end"),
+    )

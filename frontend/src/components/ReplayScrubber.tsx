@@ -10,12 +10,14 @@ import {
 
 interface ReplayScrubberProps {
   currentDate: string; // YYYY-MM-DD
+  endDate?: string;
   onDateChange: (date: string) => void;
   activeCount: number;
 }
 
 export const ReplayScrubber: React.FC<ReplayScrubberProps> = ({
   currentDate,
+  endDate: configuredEndDate,
   onDateChange,
   activeCount
 }) => {
@@ -23,7 +25,8 @@ export const ReplayScrubber: React.FC<ReplayScrubberProps> = ({
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1);
 
   const startDate = new Date('2025-01-01').getTime();
-  const endDate = new Date('2026-09-04').getTime();
+  const endDateLabel = configuredEndDate || new Date().toISOString().slice(0, 10);
+  const endDate = new Date(endDateLabel).getTime();
   const currTime = new Date(currentDate).getTime();
 
   // Playback timer effect
@@ -92,9 +95,7 @@ export const ReplayScrubber: React.FC<ReplayScrubberProps> = ({
 
         <div className="flex justify-between text-[9px] font-mono text-slate-500">
           <span>2025-01-01</span>
-          <span>2025-06-01</span>
-          <span>2026-01-01</span>
-          <span>2026-09-04</span>
+          <span>{endDateLabel}</span>
         </div>
       </div>
 

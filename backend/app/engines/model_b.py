@@ -1,5 +1,7 @@
 ﻿import math
+import json
 from datetime import date, datetime
+from pathlib import Path
 from typing import List, Dict, Any, Optional, Union, Tuple
 import pandas as pd
 
@@ -11,7 +13,16 @@ class ModelBEngine:
     """
 
     def __init__(self):
-        self.precedence = ["REACTIVATED", "NEW", "PERSISTENT", "DORMANT", "INTERMITTENT"]
+        root = Path(__file__).resolve().parents[3]
+        with (root / "backend/config/frozen_thresholds.json").open("r", encoding="utf-8") as fh:
+            config = json.load(fh)["model_b"]
+        self.recent_days = int(config["recent_days"])
+        self.dormant_days = int(config["dormant_days"])
+        self.reactivation_gap_days = int(config["reactivation_gap_days"])
+        self.persistent_lifetime_days = int(config["persistent_lifetime_days"])
+        self.persistent_active_months_180 = int(config["persistent_active_months_180"])
+        self.persistent_active_days_180 = int(config["persistent_active_days_180"])
+        self.precedence = list(config["precedence"])
 
     def compute_timeline_stats(
         self,
@@ -103,8 +114,9 @@ class ModelBEngine:
         rag = stats.get("reactivation_age_days")
 
         # 1. REACTIVATED
-        if (dsl <= 30 and dsf > 30 and llg is not None and not pd.isna(llg) and llg >= 90 and
-                rag is not None and not pd.isna(rag) and rag <= 30):
+        if (dsl <= self.recent_days and dsf > self.recent_days and llg is not None and
+                not pd.isna(llg) and llg >= self.reactivation_gap_days and
+                rag is not None and not pd.isna(rag) and rag <= self.recent_days):
             state = "REACTIVATED"
             if ad30 == 1:
                 conf = "LOW"
@@ -116,7 +128,7 @@ class ModelBEngine:
             return {"state": state, "confidence": conf, "reason": reason, "stats": stats}
 
         # 2. NEW
-        if dsl <= 30 and dsf <= 30:
+        if dsl <= self.recent_days and dsf <= self.recent_days:
             state = "NEW"
             if ad30 == 1:
                 conf = "LOW"
@@ -128,7 +140,9 @@ class ModelBEngine:
             return {"state": state, "confidence": conf, "reason": reason, "stats": stats}
 
         # 3. PERSISTENT
-        if dsl <= 30 and life >= 90 and am180 >= 3 and ad180 >= 6:
+        if (dsl <= self.recent_days and life >= self.persistent_lifetime_days and
+                am180 >= self.persistent_active_months_180 and
+                ad180 >= self.persistent_active_days_180):
             state = "PERSISTENT"
             if am180 >= 4 and ad180 >= 12:
                 conf = "HIGH"
@@ -138,7 +152,7 @@ class ModelBEngine:
             return {"state": state, "confidence": conf, "reason": reason, "stats": stats}
 
         # 4. DORMANT
-        if dsl > 90:
+        if dsl > self.dormant_days:
             state = "DORMANT"
             if dsl >= 180:
                 conf = "HIGH"

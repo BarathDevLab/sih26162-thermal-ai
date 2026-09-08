@@ -5,6 +5,7 @@ for demonstration and continuous operations.
 """
 
 import uuid
+import os
 import logging
 from datetime import date, datetime, timezone
 from typing import Dict, Any, Optional
@@ -60,6 +61,8 @@ async def trigger_poll(db: Session = Depends(get_db)):
     try:
         res = await trigger_manual_poll(db)
         return {"status": "SUCCESS", "result": res}
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         logger.error(f"Manual FIRMS poll failed: {e}")
         raise HTTPException(status_code=500, detail=f"Manual poll error: {str(e)}")
@@ -72,11 +75,13 @@ async def trigger_poll(db: Session = Depends(get_db)):
 async def trigger_decay(db: Session = Depends(get_db)):
     """
     Forces an immediate daily Model B temporal decay maintenance run,
-    transitioning sites inactive past 30 days to DORMANT.
+    recomputing every site with the frozen Model B engine at the current cutoff.
     """
     try:
         res = await trigger_manual_decay(db)
         return {"status": "SUCCESS", "result": res}
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         logger.error(f"Manual Model B decay failed: {e}")
         raise HTTPException(status_code=500, detail=f"Manual decay error: {str(e)}")
@@ -98,6 +103,8 @@ async def simulate_hotspot(
     - Live Model B and Model C rescoring
     - Decision Engine alert synthesis and instant SSE broadcast to the command center
     """
+    if os.environ.get("ALLOW_SIMULATION", "false").lower() != "true":
+        raise HTTPException(status_code=403, detail="Synthetic hotspot injection is disabled.")
     now = datetime.now(timezone.utc)
     acq_d = req.acq_date or date.today().isoformat()
     acq_t = req.acq_time or now.strftime("%H%M")

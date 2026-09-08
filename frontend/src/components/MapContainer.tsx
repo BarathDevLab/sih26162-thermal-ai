@@ -122,10 +122,15 @@ export const MapContainer: React.FC<MapContainerProps> = ({
   const [show3DColumns, setShow3DColumns] = useState<boolean>(true);
 
   const onSelectSiteRef = useRef(onSelectSite);
-  onSelectSiteRef.current = onSelectSite;
-
   const onBoundsChangeRef = useRef(onBoundsChange);
-  onBoundsChangeRef.current = onBoundsChange;
+
+  useEffect(() => {
+    onSelectSiteRef.current = onSelectSite;
+  }, [onSelectSite]);
+
+  useEffect(() => {
+    onBoundsChangeRef.current = onBoundsChange;
+  }, [onBoundsChange]);
 
   const lastFlownCoordsRef = useRef<[number, number] | null>(null);
 
@@ -512,6 +517,9 @@ export const MapContainer: React.FC<MapContainerProps> = ({
     }
   };
 
+  const initialSetupLayersRef = useRef(setupLayers);
+  const initialIs3DRef = useRef(is3D);
+
   // 1. Initialize MapLibre in 3D Globe Projection with Atmospheric Glow
   useEffect(() => {
     if (!mapContainerRef.current) return;
@@ -519,11 +527,11 @@ export const MapContainer: React.FC<MapContainerProps> = ({
 
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
-      style: is3D ? SATELLITE_GLOBE_STYLE : DARK_TACTICAL_STYLE,
+      style: initialIs3DRef.current ? SATELLITE_GLOBE_STYLE : DARK_TACTICAL_STYLE,
       center: [78.9629, 20.5937],
-      zoom: is3D ? 2.5 : 4.8,
-      pitch: is3D ? 45 : 0,
-      bearing: is3D ? -12 : 0,
+      zoom: initialIs3DRef.current ? 2.5 : 4.8,
+      pitch: initialIs3DRef.current ? 45 : 0,
+      bearing: initialIs3DRef.current ? -12 : 0,
       maxPitch: 85
     });
 
@@ -545,7 +553,7 @@ export const MapContainer: React.FC<MapContainerProps> = ({
         });
       }
 
-      setupLayers(map);
+      initialSetupLayersRef.current(map);
 
       try {
         const deckOverlay = new MapboxOverlay({
@@ -674,7 +682,7 @@ export const MapContainer: React.FC<MapContainerProps> = ({
           map.easeTo({
             center: coords,
             zoom: Math.max(map.getZoom(), 12.5),
-            pitch: is3D ? 52 : map.getPitch(),
+            pitch: initialIs3DRef.current ? 52 : map.getPitch(),
             duration: 750
           });
         }
@@ -802,12 +810,12 @@ export const MapContainer: React.FC<MapContainerProps> = ({
       if (deckOverlayRef.current) {
         try {
           map.removeControl(deckOverlayRef.current as any);
-        } catch (e) {}
+        } catch {}
         deckOverlayRef.current = null;
       }
       try {
         map.remove();
-      } catch (e) {}
+      } catch {}
     };
   }, []);
 
@@ -939,7 +947,7 @@ export const MapContainer: React.FC<MapContainerProps> = ({
             elevationScale: 1,
             getPosition: (d: SiteGeoJSONFeature) => d.geometry.coordinates,
             getElevation: (d: SiteGeoJSONFeature) => {
-              const rawScore = d.properties.c_score ?? 0.25;
+              const rawScore = d.properties.c_score ?? 0;
               return Math.max(1200, rawScore * spikeScale);
             },
             getFillColor: (d: SiteGeoJSONFeature) => {
@@ -948,7 +956,9 @@ export const MapContainer: React.FC<MapContainerProps> = ({
               if (cStatus === 'ANOMALOUS') return [249, 115, 22, 235];
               if (cStatus === 'ELEVATED') return [234, 179, 8, 220];
               if (d.properties.a_class === 'INDUSTRIAL') return [245, 158, 11, 215];
-              return [16, 185, 129, 190];
+              if (d.properties.a_class === 'NONINDUSTRIAL') return [16, 185, 129, 190];
+              if (d.properties.a_class === 'UNKNOWN') return [129, 140, 248, 190];
+              return [100, 116, 139, 170];
             },
             getLineColor: [0, 0, 0, 255],
             lineWidthMinPixels: 1.5,

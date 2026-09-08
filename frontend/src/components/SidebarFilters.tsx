@@ -93,7 +93,7 @@ export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
             </div>
             <div className="flex items-center gap-1.5">
               <span className="text-[9.5px] font-mono px-1.5 py-0.2 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30">
-                {filters.aClasses.length}/3
+                {filters.aClasses.length}/4
               </span>
               {openSections.modelA ? <ChevronDown className="w-3.5 h-3.5 text-slate-400" /> : <ChevronRight className="w-3.5 h-3.5 text-slate-400" />}
             </div>
@@ -189,6 +189,21 @@ export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
                 </div>
               </div>
 
+              <button
+                onClick={() => toggleArrayItem('aClasses', 'UNAVAILABLE')}
+                className={`w-full p-2 rounded text-left border flex items-center justify-between transition-all ${
+                  filters.aClasses.includes('UNAVAILABLE')
+                    ? 'bg-slate-700/30 border-slate-500/40 text-slate-200'
+                    : 'bg-[#080d18] border-white/5 text-slate-400 hover:border-white/15'
+                }`}
+              >
+                <span>
+                  <span className="block font-mono text-[10.5px] font-bold">UNAVAILABLE</span>
+                  <span className="block text-[9px] text-slate-400 font-mono">No current Model A inference</span>
+                </span>
+                <span className="w-2 h-2 rounded-full bg-slate-500" />
+              </button>
+
               {/* Unambiguous Rule Note */}
               <div className="mt-1 px-2 py-1.5 rounded bg-indigo-950/30 border border-indigo-500/20 text-[9.5px] text-indigo-300/80 font-mono flex items-start gap-1.5 leading-relaxed">
                 <Info className="w-3 h-3 text-indigo-400 shrink-0 mt-0.5" />
@@ -212,7 +227,7 @@ export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
             </div>
             <div className="flex items-center gap-1.5">
               <span className="text-[9.5px] font-mono px-1.5 py-0.2 rounded bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
-                {filters.bStates.length}/5
+                {filters.bStates.length}/6
               </span>
               {openSections.modelB ? <ChevronDown className="w-3.5 h-3.5 text-slate-400" /> : <ChevronRight className="w-3.5 h-3.5 text-slate-400" />}
             </div>
@@ -222,10 +237,11 @@ export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
             <div className="p-2 space-y-1">
               {[
                 { id: 'PERSISTENT', label: 'PERSISTENT', desc: 'Frequent multi-window burns', color: 'bg-cyan-400' },
-                { id: 'REACTIVATED', label: 'REACTIVATED', desc: 'Re-emerged post >180d dormant', color: 'bg-purple-400' },
+                { id: 'REACTIVATED', label: 'REACTIVATED', desc: 'Returned after a ≥90d gap', color: 'bg-purple-400' },
                 { id: 'INTERMITTENT', label: 'INTERMITTENT', desc: 'Sporadic operating schedule', color: 'bg-sky-400' },
-                { id: 'NEW', label: 'NEW SOURCE', desc: 'First detected ≤90d window', color: 'bg-teal-400' },
-                { id: 'DORMANT', label: 'DORMANT', desc: 'Inactive past 90+ days', color: 'bg-slate-500' }
+                { id: 'NEW', label: 'NEW SOURCE', desc: 'First observed within 30d', color: 'bg-teal-400' },
+                { id: 'DORMANT', label: 'DORMANT', desc: 'Inactive for >90 days', color: 'bg-slate-500' },
+                { id: 'UNAVAILABLE', label: 'UNAVAILABLE', desc: 'No Model B state at cutoff', color: 'bg-slate-700' }
               ].map(b => {
                 const isActive = filters.bStates.includes(b.id);
                 return (
@@ -268,7 +284,7 @@ export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
             </div>
             <div className="flex items-center gap-1.5">
               <span className="text-[9.5px] font-mono px-1.5 py-0.2 rounded bg-orange-500/15 text-orange-300 border border-orange-500/30">
-                {filters.cStatuses.length}/5
+                {filters.cStatuses.length}/7
               </span>
               {openSections.modelC ? <ChevronDown className="w-3.5 h-3.5 text-slate-400" /> : <ChevronRight className="w-3.5 h-3.5 text-slate-400" />}
             </div>
@@ -277,11 +293,13 @@ export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
           {openSections.modelC && (
             <div className="p-2 space-y-1.5">
               {[
-                { id: 'CRITICAL', label: 'CRITICAL', score: 'P ≥ 0.99', desc: 'Emergency combustion surge', color: 'bg-red-500 border-red-400/40 text-red-300', dot: 'bg-red-400 shadow-[0_0_8px_#f87171]' },
-                { id: 'ANOMALOUS', label: 'ANOMALOUS', score: 'P ≥ 0.95', desc: 'High thermal intensity deviation', color: 'bg-orange-500/20 border-orange-400/40 text-orange-300', dot: 'bg-orange-400 shadow-[0_0_6px_#fb923c]' },
-                { id: 'ELEVATED', label: 'ELEVATED', score: 'P ≥ 0.90', desc: 'Noticeable baseline departure', color: 'bg-amber-500/20 border-amber-400/40 text-amber-300', dot: 'bg-amber-400' },
-                { id: 'NORMAL', label: 'NORMAL', score: 'P < 0.90', desc: 'Expected operational radiance', color: 'bg-emerald-500/20 border-emerald-400/40 text-emerald-300', dot: 'bg-emerald-400' },
-                { id: 'INSUFFICIENT_HISTORY', label: 'COLD START', score: '<5 active days', desc: 'Statistical baseline building', color: 'bg-slate-700/40 border-slate-600/40 text-slate-300', dot: 'bg-slate-400' }
+                { id: 'CRITICAL', label: 'CRITICAL', score: 'P ≥ 0.999', desc: 'Extreme calibrated anomaly', color: 'bg-red-500 border-red-400/40 text-red-300', dot: 'bg-red-400 shadow-[0_0_8px_#f87171]' },
+                { id: 'ANOMALOUS', label: 'ANOMALOUS', score: 'P ≥ 0.990', desc: 'High calibrated anomaly', color: 'bg-orange-500/20 border-orange-400/40 text-orange-300', dot: 'bg-orange-400 shadow-[0_0_6px_#fb923c]' },
+                { id: 'ELEVATED', label: 'ELEVATED', score: 'P ≥ 0.950', desc: 'Elevated calibrated anomaly', color: 'bg-amber-500/20 border-amber-400/40 text-amber-300', dot: 'bg-amber-400' },
+                { id: 'NORMAL', label: 'NORMAL', score: 'P < 0.950', desc: 'Within the calibrated baseline', color: 'bg-emerald-500/20 border-emerald-400/40 text-emerald-300', dot: 'bg-emerald-400' },
+                { id: 'INSUFFICIENT_HISTORY', label: 'COLD START', score: '<5 prior days', desc: 'Statistical baseline unavailable', color: 'bg-slate-700/40 border-slate-600/40 text-slate-300', dot: 'bg-slate-400' },
+                { id: 'NO_RECENT_EVENT', label: 'NO RECENT EVENT', score: '>30d inactive', desc: 'Presentation state, not normal', color: 'bg-slate-700/40 border-slate-600/40 text-slate-300', dot: 'bg-slate-500' },
+                { id: 'UNAVAILABLE', label: 'UNAVAILABLE', score: 'N/A', desc: 'No Model C result at cutoff', color: 'bg-slate-700/40 border-slate-600/40 text-slate-300', dot: 'bg-slate-700' }
               ].map(c => {
                 const isActive = filters.cStatuses.includes(c.id);
                 return (

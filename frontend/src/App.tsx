@@ -25,9 +25,9 @@ import {
 } from './services/api';
 
 const DEFAULT_FILTERS: FilterState = {
-  aClasses: ['INDUSTRIAL', 'NONINDUSTRIAL', 'UNKNOWN'],
-  bStates: ['PERSISTENT', 'REACTIVATED', 'INTERMITTENT', 'NEW', 'DORMANT'],
-  cStatuses: ['CRITICAL', 'ANOMALOUS', 'ELEVATED', 'NORMAL', 'INSUFFICIENT_HISTORY'],
+  aClasses: ['INDUSTRIAL', 'NONINDUSTRIAL', 'UNKNOWN', 'UNAVAILABLE'],
+  bStates: ['PERSISTENT', 'REACTIVATED', 'INTERMITTENT', 'NEW', 'DORMANT', 'UNAVAILABLE'],
+  cStatuses: ['CRITICAL', 'ANOMALOUS', 'ELEVATED', 'NORMAL', 'INSUFFICIENT_HISTORY', 'NO_RECENT_EVENT', 'UNAVAILABLE'],
   alertSeverities: ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'],
   evidenceLayers: {
     gem: true,
@@ -44,7 +44,7 @@ const DEFAULT_FILTERS: FilterState = {
 export default function App() {
   const [health, setHealth] = useState<HealthCheck | null>(null);
   const [stats, setStats] = useState<SystemStats | null>(null);
-  const [mode, setMode] = useState<'LIVE' | 'REPLAY'>('LIVE');
+  const [mode, setMode] = useState<'LIVE' | 'REPLAY'>('REPLAY');
   const [replayDate, setReplayDate] = useState<string>('2025-06-01');
   const [is3D, setIs3D] = useState<boolean>(false);
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
@@ -70,6 +70,11 @@ export default function App() {
         setHealth(h);
         setStats(s);
         setAlerts(a.alerts);
+        const liveReady = h.status === 'READY' || h.status === 'DEGRADED_PRITHVI_UNAVAILABLE';
+        setMode(liveReady ? 'LIVE' : 'REPLAY');
+        if (!liveReady && s.latest_firms_date) {
+          setReplayDate(s.latest_firms_date);
+        }
       } catch (err) {
         console.error('Telemetry bootstrap failed:', err);
       }
@@ -122,7 +127,8 @@ export default function App() {
   }, [currentBBox, mode, replayDate]);
 
   useEffect(() => {
-    loadSites();
+    const task = window.setTimeout(() => void loadSites(), 0);
+    return () => window.clearTimeout(task);
   }, [loadSites]);
 
   // 4. Load Detailed Site Intelligence when a site is selected
@@ -130,11 +136,11 @@ export default function App() {
     let active = true;
 
     if (!selectedSiteId) {
-      setSelectedSite(null);
       return;
     }
 
-    fetchSiteDetail(selectedSiteId)
+    const cutoff = mode === 'REPLAY' ? replayDate : undefined;
+    fetchSiteDetail(selectedSiteId, cutoff)
       .then((detail) => {
         if (active) {
           setSelectedSite(detail);
@@ -147,7 +153,7 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [selectedSiteId]);
+  }, [selectedSiteId, mode, replayDate]);
 
   // Jump to site action from alert feed
   const handleJumpToSite = (siteId: string, lat?: number, lon?: number) => {
@@ -165,7 +171,7 @@ export default function App() {
     <div className="flex flex-col w-screen h-screen overflow-hidden bg-[#070a12] text-slate-100 select-none">
       {/* Top Telemetry Header */}
       <Header
-        stats={stats}
+        stats={mode === 'LIVE' ? stats : null}
         health={health}
         mode={mode}
         onModeChange={(m) => {
@@ -175,7 +181,7 @@ export default function App() {
         is3D={is3D}
         onToggle3D={() => setIs3D(!is3D)}
         sseConnected={sseConnected}
-        activeAlertCount={alerts.length}
+        activeAlertCount={mode === 'LIVE' ? alerts.length : null}
       />
 
       {/* Main Workspace Cockpit */}
@@ -214,6 +220,7 @@ export default function App() {
           {mode === 'REPLAY' && (
             <ReplayScrubber
               currentDate={replayDate}
+              endDate={stats?.latest_firms_date || undefined}
               onDateChange={setReplayDate}
               activeCount={sitesData?.total_count || 0}
             />
@@ -223,7 +230,8 @@ export default function App() {
         {/* Right Site Intelligence Drawer */}
         {selectedSiteId && (
           <SiteDrawer
-            site={selectedSite}
+            site={selectedSite?.site_id === selectedSiteId ? selectedSite : null}
+            asOfDate={mode === 'REPLAY' ? replayDate : undefined}
             onClose={() => setSelectedSiteId(null)}
           />
         )}

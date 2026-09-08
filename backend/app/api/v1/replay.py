@@ -1,128 +1,157 @@
-"""
-Historical Replay Mode API Endpoints
-Enforces strict historical cutoff without future data leakage
-"""
+"""Leakage-safe historical system snapshot reconstruction."""
+
+from __future__ import annotations
 
 import logging
 from datetime import datetime
 from typing import List
+
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from backend.app.db.session import get_db
 from backend.app.db.models import (
-    SourceSite,
-    SiteModelA,
-    SiteDailyInference,
     SiteDailyActivity,
-    Alert
+    SiteDailyInference,
+    SiteModelAHistory,
+    SourceSite,
 )
+from backend.app.db.session import get_db
+from backend.app.engines.model_b import ModelBEngine
+from backend.app.engines.decision_engine import DecisionEngine
 from backend.app.schemas.replay import ReplaySnapshotResponse
-from backend.app.schemas.sites import (
-    SiteGeoJSONFeature,
-    SiteGeoJSONGeometry,
-    SiteCompactProperties
-)
+from backend.app.schemas.sites import SiteCompactProperties, SiteGeoJSONFeature, SiteGeoJSONGeometry
+
 
 logger = logging.getLogger(__name__)
-
 router = APIRouter()
 
 
-@router.get(
-    "/replay",
-    response_model=ReplaySnapshotResponse,
-    summary="Historical snapshot reconstruction for replay mode"
-)
+@router.get("/replay", response_model=ReplaySnapshotResponse)
 def get_replay_snapshot(
-    date: str = Query(..., description="Historical cutoff date (YYYY-MM-DD)", pattern=r"^\d{4}-\d{2}-\d{2}$"),
-    bbox: str = Query(None, description="Optional bounding box 'min_lon,min_lat,max_lon,max_lat'"),
-    limit: int = Query(5000, ge=1, le=10000, description="Max sites to return"),
-    db: Session = Depends(get_db)
+    date: str = Query(..., pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    bbox: str = Query(None),
+    limit: int = Query(5000, ge=1, le=10000),
+    db: Session = Depends(get_db),
 ):
-    """
-    Reconstructs the spatial state of thermal sources and anomalies as of the exact specified date.
-    Never uses post-cutoff observations or states.
-    """
     try:
-        cutoff_date = datetime.strptime(date, "%Y-%m-%d").date()
-    except Exception:
+        cutoff = datetime.strptime(date, "%Y-%m-%d").date()
+    except ValueError:
         raise HTTPException(status_code=400, detail="Invalid date format. Expected YYYY-MM-DD.")
 
-    try:
-        # Query historical inferences on this specific date
-        query = (
-            db.query(
-                SourceSite.site_id,
-                SourceSite.latitude,
-                SourceSite.longitude,
-                SiteModelA.class_name.label("a_class"),
-                SiteModelA.core_probability.label("a_prob"),
-                SiteDailyInference.model_b_state.label("b_state"),
-                SiteDailyInference.model_c_status.label("c_status"),
-                SiteDailyInference.c_score.label("c_score"),
-                Alert.alert_level.label("alert_severity"),
-                Alert.alert_type.label("alert_type")
-            )
-            .join(SiteDailyInference, SourceSite.site_id == SiteDailyInference.site_id)
-            .outerjoin(SiteModelA, SourceSite.site_id == SiteModelA.site_id)
-            .outerjoin(
-                Alert,
-                (SourceSite.site_id == Alert.site_id) &
-                (Alert.site_day == cutoff_date)
-            )
-            .filter(SiteDailyInference.acq_date == cutoff_date)
+    latest_activity = (
+        db.query(
+            SiteDailyActivity.site_id.label("site_id"),
+            func.max(SiteDailyActivity.acq_date).label("latest_seen"),
         )
-
-        # Bounding box filter
-        if bbox:
-            try:
-                parts = [float(p.strip()) for p in bbox.split(",")]
-                if len(parts) == 4:
-                    min_lon, min_lat, max_lon, max_lat = parts
-                    query = query.filter(
-                        SourceSite.longitude >= min_lon,
-                        SourceSite.longitude <= max_lon,
-                        SourceSite.latitude >= min_lat,
-                        SourceSite.latitude <= max_lat
-                    )
-            except Exception as e:
-                raise HTTPException(status_code=400, detail=f"Invalid bbox: {e}")
-
-        rows = query.limit(limit).all()
-
-        features: List[SiteGeoJSONFeature] = []
-        alerts_count = 0
-        for r in rows:
-            if r.alert_severity:
-                alerts_count += 1
-            features.append(
-                SiteGeoJSONFeature(
-                    geometry=SiteGeoJSONGeometry(
-                        coordinates=[round(float(r.longitude), 5), round(float(r.latitude), 5)]
-                    ),
-                    properties=SiteCompactProperties(
-                        site_id=r.site_id,
-                        a_class=r.a_class or "UNKNOWN",
-                        a_prob=round(float(r.a_prob or 0.5), 4),
-                        b_state=r.b_state or "DORMANT",
-                        c_status=r.c_status or "NORMAL",
-                        c_score=round(float(r.c_score), 4) if r.c_score is not None else None,
-                        alert_severity=r.alert_severity,
-                        alert_type=r.alert_type,
-                        latest_seen=date
-                    )
-                )
+        .filter(SiteDailyActivity.acq_date <= cutoff)
+        .group_by(SiteDailyActivity.site_id)
+        .subquery()
+    )
+    query = (
+        db.query(SourceSite, latest_activity.c.latest_seen)
+        .join(latest_activity, latest_activity.c.site_id == SourceSite.site_id)
+    )
+    if bbox:
+        try:
+            parts = [float(value.strip()) for value in bbox.split(",")]
+            if len(parts) != 4:
+                raise ValueError("bbox must contain four values")
+            min_lon, min_lat, max_lon, max_lat = parts
+            query = query.filter(
+                SourceSite.longitude.between(min_lon, max_lon),
+                SourceSite.latitude.between(min_lat, max_lat),
             )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid bbox: {exc}")
 
-        return ReplaySnapshotResponse(
-            as_of_date=date,
-            active_sites_count=len(features),
-            alerts_count=alerts_count,
-            features=features
+    rows = query.order_by(SourceSite.site_id).limit(limit).all()
+    features: List[SiteGeoJSONFeature] = []
+    alert_count = 0
+    model_b = ModelBEngine()
+    decision_engine = DecisionEngine()
+
+    for site, latest_seen in rows:
+        a_history = (
+            db.query(SiteModelAHistory)
+            .filter(
+                SiteModelAHistory.site_id == site.site_id,
+                SiteModelAHistory.feature_as_of_detection_date <= cutoff,
+                or_(
+                    SiteModelAHistory.imagery_acquisition_date.is_(None),
+                    SiteModelAHistory.imagery_acquisition_date <= cutoff,
+                ),
+            )
+            .order_by(
+                SiteModelAHistory.feature_as_of_detection_date.desc(),
+                SiteModelAHistory.computed_at.desc(),
+            )
+            .first()
         )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error fetching replay snapshot: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to generate replay snapshot: {str(e)}")
+        c_history = (
+            db.query(SiteDailyInference)
+            .filter(
+                SiteDailyInference.site_id == site.site_id,
+                SiteDailyInference.acq_date <= cutoff,
+            )
+            .order_by(SiteDailyInference.acq_date.desc())
+            .first()
+        )
+        active_dates = [
+            value[0]
+            for value in db.query(SiteDailyActivity.acq_date)
+            .filter(
+                SiteDailyActivity.site_id == site.site_id,
+                SiteDailyActivity.acq_date <= cutoff,
+            )
+            .order_by(SiteDailyActivity.acq_date)
+            .all()
+        ]
+        b_result = model_b.predict(active_dates, as_of_date=cutoff) if active_dates else None
+        if c_history is None:
+            c_status = "UNAVAILABLE"
+            c_score = None
+        elif (cutoff - c_history.acq_date).days > 30:
+            c_status = "NO_RECENT_EVENT"
+            c_score = None
+        else:
+            c_status = c_history.model_c_status
+            c_score = c_history.c_score
+
+        replay_alert = None
+        if (
+            a_history is not None
+            and b_result is not None
+            and c_status not in ("NO_RECENT_EVENT", "UNAVAILABLE")
+        ):
+            candidate = decision_engine.evaluate(
+                site_id=site.site_id,
+                site_day=cutoff.isoformat(),
+                model_a_result={"decision": a_history.decision},
+                model_b_result=b_result,
+                model_c_result={"status": c_status, "c_score": c_score},
+            )
+            if candidate["alert_level"] not in ("NONE", "INFO"):
+                replay_alert = candidate
+                alert_count += 1
+        features.append(SiteGeoJSONFeature(
+            geometry=SiteGeoJSONGeometry(coordinates=[site.longitude, site.latitude]),
+            properties=SiteCompactProperties(
+                site_id=site.site_id,
+                a_class=a_history.class_name if a_history else "UNAVAILABLE",
+                a_prob=a_history.core_probability if a_history else None,
+                b_state=b_result["state"] if b_result else "UNAVAILABLE",
+                c_status=c_status,
+                c_score=c_score,
+                alert_severity=replay_alert["alert_level"] if replay_alert else None,
+                alert_type=replay_alert["alert_type"] if replay_alert else None,
+                latest_seen=str(latest_seen),
+            ),
+        ))
+
+    return ReplaySnapshotResponse(
+        as_of_date=date,
+        active_sites_count=len(features),
+        alerts_count=alert_count,
+        features=features,
+    )

@@ -20,6 +20,7 @@ from backend.app.db.models import (
     ModelVersion
 )
 from backend.app.schemas.health import HealthCheck, SystemStats
+from backend.app.services.stack_readiness import get_last_readiness_report
 
 logger = logging.getLogger(__name__)
 
@@ -38,9 +39,9 @@ def get_health(db: Session = Depends(get_db)):
         # Check basic connectivity
         db.execute(text("SELECT 1")).scalar()
         
-        # Check PostGIS extension
-        res = db.execute(text("SELECT 1 FROM pg_extension WHERE extname = 'postgis'")).scalar()
-        postgis_ok = bool(res)
+        if db.get_bind().dialect.name == "postgresql":
+            res = db.execute(text("SELECT 1 FROM pg_extension WHERE extname = 'postgis'")).scalar()
+            postgis_ok = bool(res)
     except Exception as e:
         logger.error(f"Database health check failed: {e}")
         db_status = "degraded"
@@ -53,13 +54,11 @@ def get_health(db: Session = Depends(get_db)):
             active_models[v.component] = v.version
     except Exception as e:
         logger.warning(f"Could not read model versions: {e}")
-        active_models = {"STACK_DEFAULT": "2026-09-04-r1"}
+        active_models = {}
 
-    if not active_models:
-        active_models = {"STACK_DEFAULT": "2026-09-04-r1"}
-
+    readiness = get_last_readiness_report()
     return HealthCheck(
-        status="ok" if db_status == "connected" else "degraded",
+        status=readiness.status if db_status == "connected" else "DATABASE_NOT_READY",
         database=db_status,
         postgis_enabled=postgis_ok,
         active_models=active_models,
@@ -82,20 +81,20 @@ def get_stats(db: Session = Depends(get_db)):
 
         # 3. Model A counts
         a_counts_raw = db.query(SiteModelA.class_name, func.count(SiteModelA.site_id)).group_by(SiteModelA.class_name).all()
-        model_a_counts = {cls or "UNKNOWN": count for cls, count in a_counts_raw}
-        for k in ["INDUSTRIAL", "NONINDUSTRIAL", "UNKNOWN"]:
+        model_a_counts = {cls or "UNAVAILABLE": count for cls, count in a_counts_raw}
+        for k in ["INDUSTRIAL", "NONINDUSTRIAL", "UNKNOWN", "UNAVAILABLE"]:
             model_a_counts.setdefault(k, 0)
 
         # 4. Model B counts
         b_counts_raw = db.query(SiteModelB.state, func.count(SiteModelB.site_id)).group_by(SiteModelB.state).all()
-        model_b_counts = {state or "UNKNOWN": count for state, count in b_counts_raw}
-        for k in ["PERSISTENT", "DORMANT", "REACTIVATED", "INTERMITTENT", "NEW"]:
+        model_b_counts = {state or "UNAVAILABLE": count for state, count in b_counts_raw}
+        for k in ["PERSISTENT", "DORMANT", "REACTIVATED", "INTERMITTENT", "NEW", "UNAVAILABLE"]:
             model_b_counts.setdefault(k, 0)
 
         # 5. Model C counts
         c_counts_raw = db.query(SiteModelC.operational_status, func.count(SiteModelC.site_id)).group_by(SiteModelC.operational_status).all()
-        model_c_counts = {status or "UNKNOWN": count for status, count in c_counts_raw}
-        for k in ["NORMAL", "ELEVATED", "ANOMALOUS", "CRITICAL", "INSUFFICIENT_HISTORY"]:
+        model_c_counts = {status or "UNAVAILABLE": count for status, count in c_counts_raw}
+        for k in ["NORMAL", "ELEVATED", "ANOMALOUS", "CRITICAL", "INSUFFICIENT_HISTORY", "UNAVAILABLE"]:
             model_c_counts.setdefault(k, 0)
 
         # 6. Active Alerts by severity
@@ -125,7 +124,7 @@ def get_stats(db: Session = Depends(get_db)):
             model_c_counts=model_c_counts,
             alert_counts=alert_counts,
             latest_firms_date=latest_date_str,
-            data_mode="LIVE"
+            data_mode="LIVE" if get_last_readiness_report().can_start_live else "STALE_BLOCKED"
         )
     except Exception as e:
         logger.error(f"Error fetching system stats: {e}")

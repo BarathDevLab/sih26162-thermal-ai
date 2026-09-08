@@ -22,6 +22,8 @@ def test_feature_builder_extraction():
     # Check thermal values
     assert df['mean_frp'].iloc[0] == 30.0
     assert df['min_frp' if 'min_frp' in df else 'max_frp'].iloc[0] == 45.0
+    assert df['std_frp'].iloc[0] == pytest.approx(15.0)
+    assert df['frp_cv'].iloc[0] == pytest.approx(0.5)
     assert df['night_ratio'].iloc[0] == pytest.approx(2/3)
 
     # Check recurrence values
@@ -32,3 +34,32 @@ def test_feature_builder_extraction():
 
     # Land cover NaN when not provided
     assert np.isnan(df['tree_fraction'].iloc[0])
+
+
+def test_explicit_worldcover_nodata_remains_missing_for_model_imputer():
+    frame = FeatureBuilder().build_features_from_detections(
+        [{
+            'latitude': 13.05,
+            'longitude': 96.87,
+            'acq_date': '2026-01-01',
+            'acq_time': '0830',
+            'frp': 10.0,
+            'daynight': 'D',
+        }],
+        land_cover={name: None for name in ORDERED_FEATURES[-9:]},
+    )
+
+    assert frame.iloc[0, -9:].isna().all()
+
+
+def test_single_active_day_matches_frozen_missing_value_semantics():
+    df = FeatureBuilder().build_features_from_detections([
+        {
+            'frp': 15.0, 'daynight': 'D', 'acq_date': '2025-01-01',
+            'latitude': 20.0, 'longitude': 78.0,
+        }
+    ])
+    assert np.isnan(df['std_frp'].iloc[0])
+    assert np.isnan(df['frp_cv'].iloc[0])
+    assert np.isnan(df['mean_recurrence_gap_days'].iloc[0])
+    assert np.isnan(df['median_recurrence_gap_days'].iloc[0])

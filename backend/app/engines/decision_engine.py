@@ -8,6 +8,7 @@ import os
 import json
 import hashlib
 import logging
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
 
@@ -45,24 +46,28 @@ class DecisionEngine:
         Loads decision engine rules and severity specification.
         Falls back to frozen or draft config if path not specified.
         """
-        candidate_paths = [
-            config_path,
-            os.path.join("backend", "config", "decision_engine.json"),
-            os.path.join("backend", "config", "decision_engine_draft.json")
+        path = Path(config_path) if config_path else (
+            Path(__file__).resolve().parents[3] / "backend/config/decision_engine.json"
+        )
+        if not path.is_file():
+            raise FileNotFoundError(f"Frozen decision engine config not found: {path}")
+        with path.open("r", encoding="utf-8") as handle:
+            cfg = json.load(handle)
+        if cfg.get("status") != "FROZEN":
+            raise ValueError("Decision engine config is not frozen.")
+        if cfg.get("severity_order") != SEVERITY_ORDER:
+            raise ValueError("Decision engine severity order disagrees with runtime code.")
+        configured_types = [rule["alert_type"] for rule in cfg.get("rules", [])]
+        expected_types = [
+            "CRITICAL_INDUSTRIAL_ANOMALY", "HIGH_INDUSTRIAL_ANOMALY",
+            "INDUSTRIAL_REACTIVATION_ANOMALY", "UNKNOWN_CRITICAL_REVIEW",
+            "UNKNOWN_ANOMALY_REVIEW", "INDUSTRIAL_ELEVATION", "NEW_SOURCE_REVIEW",
+            "NORMAL_INDUSTRIAL_OPERATION", "NONINDUSTRIAL_ACTIVITY", "NO_ALERT",
         ]
-
-        for p in candidate_paths:
-            if p and os.path.exists(p):
-                try:
-                    with open(p, "r", encoding="utf-8") as f:
-                        cfg = json.load(f)
-                    logger.info(f"Loaded decision engine config from {p}")
-                    return cfg
-                except Exception as e:
-                    logger.warning(f"Failed to read {p}: {e}")
-
-        logger.info("Using embedded default decision engine specification.")
-        return {}
+        if set(configured_types) != set(expected_types):
+            raise ValueError("Decision engine rule set disagrees with frozen runtime code.")
+        logger.info("Loaded frozen decision engine config from %s", path)
+        return cfg
 
     @staticmethod
     def is_industrial(model_a_decision: str) -> bool:

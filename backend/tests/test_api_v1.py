@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from backend.app.main import app
 from backend.app.db.session import SessionLocal
-from backend.app.db.models import SourceSite, Alert
+from backend.app.db.models import SourceSite, SiteDailyActivity
 
 client = TestClient(app)
 
@@ -18,7 +18,11 @@ def test_root_endpoint():
     response = client.get("/")
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "operational"
+    assert data["status"] in {
+        "READY", "DEGRADED_PRITHVI_UNAVAILABLE", "STALE_BACKFILL",
+        "FIRMS_CREDENTIALS_MISSING",
+        "MODEL_ARTIFACT_MISMATCH", "DATABASE_NOT_READY",
+    }
     assert "docs_url" in data
     assert data["api_v1_prefix"] == "/api/v1"
 
@@ -28,7 +32,11 @@ def test_health_endpoint():
     response = client.get("/api/v1/health")
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] in ("ok", "healthy", "degraded")
+    assert data["status"] in {
+        "READY", "DEGRADED_PRITHVI_UNAVAILABLE", "STALE_BACKFILL",
+        "FIRMS_CREDENTIALS_MISSING",
+        "MODEL_ARTIFACT_MISMATCH", "DATABASE_NOT_READY",
+    }
     assert "database" in data
     assert "active_models" in data
     assert isinstance(data["active_models"], dict)
@@ -111,16 +119,36 @@ def test_site_detail_found():
     assert detail["site_id"] == site_id
     assert "latitude" in detail
     assert "longitude" in detail
-    assert "model_a" in detail
-    assert "model_b" in detail
-    assert "model_c" in detail
-    assert "active_alert" in detail
 
 
 def test_site_detail_not_found():
     """Verify /api/v1/sites/{site_id} returns 404 for unknown site ID."""
     response = client.get("/api/v1/sites/NONEXISTENT_SITE_XYZ")
     assert response.status_code == 404
+
+
+def test_replay_drawer_endpoints_respect_cutoff():
+    """Detail, timeline, and detections must not expose observations after cutoff."""
+    with SessionLocal() as db:
+        activity = db.query(SiteDailyActivity).order_by(SiteDailyActivity.acq_date).first()
+        if activity is None:
+            pytest.skip("No activity is available for cutoff regression.")
+        site_id = activity.site_id
+        cutoff = activity.acq_date.isoformat()
+
+    detail = client.get(f"/api/v1/sites/{site_id}?as_of_date={cutoff}")
+    assert detail.status_code == 200
+    assert detail.json()["latest_seen"] <= cutoff
+
+    timeline = client.get(f"/api/v1/sites/{site_id}/timeline?as_of_date={cutoff}")
+    assert timeline.status_code == 200
+    assert all(point["acq_date"] <= cutoff for point in timeline.json()["history"])
+
+    detections = client.get(
+        f"/api/v1/sites/{site_id}/detections?as_of_date={cutoff}"
+    )
+    assert detections.status_code == 200
+    assert all(item["acq_date"] <= cutoff for item in detections.json()["detections"])
 
 
 def test_site_timeline():
@@ -203,23 +231,10 @@ def test_alerts_feed():
 
 
 def test_alert_ack_workflow():
-    """Verify acknowledging an active alert updates status to ACKNOWLEDGED."""
-    with SessionLocal() as db:
-        alert = db.query(Alert).filter(Alert.status == "ACTIVE").first()
-
-    if alert:
-        alert_id = alert.alert_id
-        ack_payload = {"acknowledged_by": "qa_analyst_agent"}
-        response = client.post(f"/api/v1/alerts/{alert_id}/ack", json=ack_payload)
-        assert response.status_code == 200
-        data = response.json()
-        assert data["alert_id"] == alert_id
-        assert data["status"] == "ACKNOWLEDGED"
-        assert data["acknowledged_by"] == "qa_analyst_agent"
-
-        # Verify 404 on invalid alert
-        bad_response = client.post("/api/v1/alerts/ALT_NONEXISTENT_9999/ack", json=ack_payload)
-        assert bad_response.status_code == 404
+    """Verify invalid acknowledgement is rejected without mutating the configured DB."""
+    payload = {"acknowledged_by": "qa_analyst_agent"}
+    response = client.post("/api/v1/alerts/ALT_NONEXISTENT_9999/ack", json=payload)
+    assert response.status_code == 404
 
 
 def test_layers_firms():

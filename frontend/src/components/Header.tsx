@@ -17,7 +17,7 @@ interface HeaderProps {
   is3D: boolean;
   onToggle3D: () => void;
   sseConnected: boolean;
-  activeAlertCount: number;
+  activeAlertCount: number | null;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -30,7 +30,8 @@ export const Header: React.FC<HeaderProps> = ({
   sseConnected,
   activeAlertCount
 }) => {
-  const modelVersion = health?.active_models?.['model_a'] || '2026-09-04-r1';
+  const modelVersion = health?.active_models?.['A_CORE'] || 'UNAVAILABLE';
+  const liveAvailable = health?.status === 'READY' || health?.status === 'DEGRADED_PRITHVI_UNAVAILABLE';
 
   return (
     <header className="h-14 bg-[#070a12] border-b border-white/10 px-4 flex items-center justify-between select-none z-30 relative shrink-0">
@@ -67,7 +68,7 @@ export const Header: React.FC<HeaderProps> = ({
           <Layers className="w-3.5 h-3.5 text-cyan-400" />
           <span className="text-[11px] text-slate-400 font-mono">Sites:</span>
           <span className="text-xs font-mono font-bold text-white">
-            {stats?.total_sites ? stats.total_sites.toLocaleString() : '79,365'}
+            {stats ? stats.total_sites.toLocaleString() : '—'}
           </span>
         </div>
 
@@ -77,7 +78,7 @@ export const Header: React.FC<HeaderProps> = ({
           <Activity className="w-3.5 h-3.5 text-emerald-400" />
           <span className="text-[11px] text-slate-400 font-mono">30d Active:</span>
           <span className="text-xs font-mono font-bold text-emerald-400">
-            {stats?.active_sites_30d ? stats.active_sites_30d.toLocaleString() : '9,010'}
+            {stats ? stats.active_sites_30d.toLocaleString() : '—'}
           </span>
         </div>
 
@@ -87,7 +88,7 @@ export const Header: React.FC<HeaderProps> = ({
           <span className="w-2 h-2 rounded-full bg-amber-400 shadow-[0_0_6px_#f59e0b]" />
           <span className="text-[11px] text-slate-400 font-mono">Industrial:</span>
           <span className="text-xs font-mono font-bold text-amber-400">
-            {stats?.model_a_counts?.['INDUSTRIAL'] ? stats.model_a_counts['INDUSTRIAL'].toLocaleString() : '808'}
+            {stats ? (stats.model_a_counts['INDUSTRIAL'] ?? 0).toLocaleString() : '—'}
           </span>
         </div>
 
@@ -97,7 +98,7 @@ export const Header: React.FC<HeaderProps> = ({
           <Radio className="w-3.5 h-3.5 text-red-400 animate-pulse" />
           <span className="text-[11px] text-slate-400 font-mono">Active Alerts:</span>
           <span className="text-xs font-mono font-bold text-red-400">
-            {activeAlertCount}
+            {activeAlertCount === null ? '—' : activeAlertCount}
           </span>
         </div>
 
@@ -131,9 +132,13 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="flex bg-[#0c1322] p-0.5 rounded border border-white/10">
           <button
             onClick={() => onModeChange('LIVE')}
+            disabled={!liveAvailable}
+            title={liveAvailable ? 'Show the current operational stack' : `Live mode blocked: ${health?.status || 'READINESS UNKNOWN'}`}
             className={`flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold tracking-wide transition-colors ${
               mode === 'LIVE'
                 ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                : !liveAvailable
+                ? 'text-slate-600 cursor-not-allowed'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
@@ -156,17 +161,19 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Real-Time SSE Stream Heartbeat Indicator */}
         <div
           className="flex items-center gap-1.5 px-2 py-1 rounded bg-[#0c1322] border border-white/10"
-          title={sseConnected ? 'Connected to live SSE alert stream' : 'Reconnecting to stream...'}
+          title={mode === 'REPLAY' ? 'Historical replay mode' : liveAvailable ? (sseConnected ? 'Connected to live SSE alert stream' : 'Reconnecting to stream...') : `Live mode blocked: ${health?.status || 'READINESS UNKNOWN'}`}
         >
           <span
             className={`w-2 h-2 rounded-full ${
-              sseConnected
+              mode === 'REPLAY' || !liveAvailable
+                ? 'bg-slate-500'
+                : sseConnected
                 ? 'bg-emerald-400 shadow-[0_0_8px_#34d399] animate-pulse'
                 : 'bg-amber-400'
             }`}
           />
           <span className="text-[10px] font-mono text-slate-300">
-            {sseConnected ? 'ONLINE' : 'CONNECTING'}
+            {mode === 'REPLAY' ? 'REPLAY' : !liveAvailable ? 'BLOCKED' : sseConnected ? 'ONLINE' : 'CONNECTING'}
           </span>
         </div>
       </div>

@@ -11,8 +11,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
-from backend.app.db.session import engine, is_postgis_available
+from backend.app.db.session import engine, is_postgis_available, SessionLocal
 from backend.app.api.v1.router import api_v1_router
+from backend.app.services.stack_readiness import run_stack_preflight, get_last_readiness_report
 
 # Logging setup
 logging.basicConfig(
@@ -28,9 +29,11 @@ async def lifespan(app: FastAPI):
     Application lifespan manager for connection pool warmup and graceful shutdown.
     """
     logger.info("Initializing SIH26162 Thermal AI Platform...")
+    database_connected = False
     try:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
+        database_connected = True
         postgis_ok = is_postgis_available(engine)
         logger.info(
             f"Database connected successfully ({engine.url.drivername}). "
@@ -39,12 +42,30 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Database pre-flight connection check failed: {e}")
 
-    # Start APScheduler and Prithvi background worker queue
-    try:
-        from backend.app.services.scheduler import start_scheduler, stop_scheduler
-        start_scheduler()
-    except Exception as e:
-        logger.warning(f"Failed to start APScheduler in lifespan: {e}")
+    if database_connected:
+        db = SessionLocal()
+        try:
+            readiness = run_stack_preflight(db)
+            app.state.stack_readiness = readiness.to_dict()
+            logger.info("Runtime readiness: %s (%s)", readiness.status, readiness.detail)
+            if readiness.can_start_live:
+                from backend.app.services.live_pipeline import get_live_pipeline_service
+
+                get_live_pipeline_service().ensure_resolver_loaded(db)
+                logger.info("Prepared the stable source-member spatial index.")
+        finally:
+            db.close()
+    else:
+        readiness = get_last_readiness_report()
+        app.state.stack_readiness = readiness.to_dict()
+
+    # Live jobs are gated by the common current stack snapshot.
+    if readiness.can_start_live:
+        try:
+            from backend.app.services.scheduler import start_scheduler
+            start_scheduler()
+        except Exception as e:
+            logger.warning(f"Failed to start APScheduler in lifespan: {e}")
 
     yield
 
@@ -105,7 +126,7 @@ def root_info() -> Dict[str, Any]:
     return {
         "service": "SIH26162 Thermal AI Decision Support Platform",
         "version": "1.0.0",
-        "status": "operational",
+        "status": get_last_readiness_report().status,
         "docs_url": "/docs",
         "redoc_url": "/redoc",
         "api_v1_prefix": "/api/v1"

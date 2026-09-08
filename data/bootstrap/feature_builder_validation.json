@@ -1,0 +1,16 @@
+{
+  "failures": [],
+  "feature_count": 33,
+  "input_sha256": {
+    "backend/config/model_a_features.json": "c4a58d71c1728b4c88d6a336d5306c7bc92009ef89d0083a1543101758f1a739",
+    "backend/models/MODEL_A_FINAL.joblib": "5b00758fb3c1f456a911d0cd37fe1a06328181036ac3e489371da43c1e99d5b6",
+    "data/bootstrap/firms_detections_2025_assigned.parquet": "729a0777b8b4b9a897615046e5edf1158aa1adca3cc4bc0f9286cae307f228de",
+    "data/bootstrap/source_site_features_2025.parquet": "fd54ab908996f7bbedd218b765623bb1439010401b0005ec86aa5593ca4b8f70",
+    "data/bootstrap/source_sites_ground_truth_FINAL.csv": "cc1ed8781f1384afa427750d70ded819cef452f1f6f50c18f3eb3d759c748029"
+  },
+  "max_absolute_error": 4.768025974044576e-10,
+  "required_sample_size": 100,
+  "sample_size": 100,
+  "status": "PASS",
+  "validated_at": "2026-09-08T12:59:38.751848+00:00"
+}

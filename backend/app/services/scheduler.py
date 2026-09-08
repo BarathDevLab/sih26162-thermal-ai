@@ -19,6 +19,7 @@ from backend.app.db.session import SessionLocal
 from backend.app.services.firms_client import FirmsClient, DEFAULT_INDIA_BBOX, DEFAULT_PRIMARY_SOURCE
 from backend.app.services.live_pipeline import get_live_pipeline_service, run_global_daily_model_b_refresh
 from backend.app.services.prithvi_queue import start_prithvi_worker, stop_prithvi_worker, get_prithvi_queue_stats
+from backend.app.services.stack_readiness import get_last_readiness_report, run_stack_preflight
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,20 @@ _telemetry = {
 }
 
 
+def _process_records_in_session(records) -> Dict[str, Any]:
+    with SessionLocal() as db:
+        return get_live_pipeline_service().process_detections_batch(
+            raw_records=records,
+            db=db,
+            source_sensor=DEFAULT_PRIMARY_SOURCE,
+        )
+
+
+def _refresh_model_b_in_session() -> Dict[str, Any]:
+    with SessionLocal() as db:
+        return run_global_daily_model_b_refresh(db=db, as_of_date=date.today())
+
+
 def get_scheduler() -> AsyncIOScheduler:
     global _scheduler
     if _scheduler is None:
@@ -57,33 +72,29 @@ async def poll_firms_nrt_job():
     _telemetry["total_poll_cycles"] += 1
 
     client = FirmsClient()
-    pipeline = get_live_pipeline_service()
 
     try:
+        readiness_db = SessionLocal()
+        try:
+            readiness = run_stack_preflight(readiness_db)
+        finally:
+            readiness_db.close()
+        if not readiness.can_start_live:
+            raise RuntimeError(f"Live poll blocked: {readiness.status}: {readiness.detail}")
         # Run network I/O in threadpool
-        loop = asyncio.get_running_loop()
-        records = await loop.run_in_threadpool(
-            client.fetch_area,
+        records = await asyncio.to_thread(
+            client.fetch_area_detections,
             source=DEFAULT_PRIMARY_SOURCE,
             bbox=DEFAULT_INDIA_BBOX,
             day_range=1
         )
 
-        db = SessionLocal()
-        try:
-            res = await loop.run_in_threadpool(
-                pipeline.process_detections_batch,
-                raw_records=records,
-                db=db,
-                source_sensor=DEFAULT_PRIMARY_SOURCE
-            )
-            _telemetry["last_poll_at"] = t0.isoformat()
-            _telemetry["last_poll_status"] = "SUCCESS"
-            _telemetry["last_records_read"] = len(records)
-            _telemetry["last_alerts_generated"] = res.get("alerts_generated", 0)
-            logger.info(f"FIRMS NRT cycle complete: {len(records)} read, {res.get('alerts_generated', 0)} alerts.")
-        finally:
-            db.close()
+        res = await asyncio.to_thread(_process_records_in_session, records)
+        _telemetry["last_poll_at"] = t0.isoformat()
+        _telemetry["last_poll_status"] = "SUCCESS"
+        _telemetry["last_records_read"] = len(records)
+        _telemetry["last_alerts_generated"] = res.get("alerts_generated", 0)
+        logger.info(f"FIRMS NRT cycle complete: {len(records)} read, {res.get('alerts_generated', 0)} alerts.")
     except Exception as e:
         logger.warning(f"FIRMS NRT polling encountered non-fatal error: {e}")
         _telemetry["last_poll_at"] = t0.isoformat()
@@ -97,25 +108,32 @@ async def daily_model_b_refresh_job():
     """
     global _telemetry
     logger.info("Executing daily Model B temporal decay refresh...")
-    loop = asyncio.get_running_loop()
-    db = SessionLocal()
     try:
-        res = await loop.run_in_threadpool(
-            run_global_daily_model_b_refresh,
-            db=db,
-            as_of_date=date.today()
-        )
+        readiness_db = SessionLocal()
+        try:
+            readiness = run_stack_preflight(readiness_db)
+        finally:
+            readiness_db.close()
+        if not readiness.can_start_live:
+            raise RuntimeError(
+                f"Model B refresh blocked: {readiness.status}: {readiness.detail}"
+            )
+        res = await asyncio.to_thread(_refresh_model_b_in_session)
         _telemetry["last_decay_at"] = datetime.now(timezone.utc).isoformat()
-        logger.info(f"Daily Model B refresh complete: {res.get('decayed_to_dormant', 0)} sites decayed.")
+        logger.info("Daily Model B refresh complete: %d sites evaluated.", res.get("sites_evaluated", 0))
     except Exception as e:
         logger.error(f"Error during daily Model B decay: {e}")
-    finally:
-        db.close()
 
 
 def start_scheduler():
     """Starts APScheduler and the asynchronous Prithvi worker."""
     global _scheduler, _telemetry
+    readiness = get_last_readiness_report()
+    if not readiness.can_start_live:
+        _telemetry["is_running"] = False
+        _telemetry["last_poll_status"] = f"BLOCKED:{readiness.status}"
+        logger.warning("Live scheduler blocked by stack readiness: %s", readiness.detail)
+        return False
     scheduler = get_scheduler()
 
     if not scheduler.running:
@@ -148,6 +166,7 @@ def start_scheduler():
 
     # Start asynchronous background Prithvi worker
     start_prithvi_worker()
+    return True
 
 
 def stop_scheduler():
@@ -187,31 +206,27 @@ def get_scheduler_status() -> Dict[str, Any]:
 async def trigger_manual_poll(db: Session) -> Dict[str, Any]:
     """Manual on-demand trigger to fetch FIRMS and execute the pipeline immediately."""
     client = FirmsClient()
-    pipeline = get_live_pipeline_service()
+    _ = db  # The actual unit of work owns a session inside its worker thread.
 
-    loop = asyncio.get_running_loop()
-    records = await loop.run_in_threadpool(
-        client.fetch_area,
+    readiness = get_last_readiness_report()
+    if not readiness.can_start_live:
+        raise RuntimeError(f"Live poll blocked: {readiness.status}: {readiness.detail}")
+    records = await asyncio.to_thread(
+        client.fetch_area_detections,
         source=DEFAULT_PRIMARY_SOURCE,
         bbox=DEFAULT_INDIA_BBOX,
         day_range=1
     )
 
-    res = await loop.run_in_threadpool(
-        pipeline.process_detections_batch,
-        raw_records=records,
-        db=db,
-        source_sensor=DEFAULT_PRIMARY_SOURCE
-    )
+    res = await asyncio.to_thread(_process_records_in_session, records)
     return res
 
 
 async def trigger_manual_decay(db: Session) -> Dict[str, Any]:
     """Manual on-demand trigger for daily Model B decay."""
-    loop = asyncio.get_running_loop()
-    res = await loop.run_in_threadpool(
-        run_global_daily_model_b_refresh,
-        db=db,
-        as_of_date=date.today()
-    )
+    readiness = get_last_readiness_report()
+    if not readiness.can_start_live:
+        raise RuntimeError(f"Model B refresh blocked: {readiness.status}: {readiness.detail}")
+    _ = db
+    res = await asyncio.to_thread(_refresh_model_b_in_session)
     return res

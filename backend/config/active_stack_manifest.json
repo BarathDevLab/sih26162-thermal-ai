@@ -1,0 +1,94 @@
+{
+  "artifacts": [
+    {
+      "repo_path": "backend/config/decision_engine.json",
+      "required": true,
+      "sha256": "eb8935d30742b59d110156d4283b89fbcac60f0c099e470f1ddbba28eaf47f69"
+    },
+    {
+      "repo_path": "backend/config/frozen_thresholds.json",
+      "required": true,
+      "sha256": "c8540d68fd73433f03b7f8cb12d97252d2ae9d18ef5b9d6f6ec4a5cec55d2714"
+    },
+    {
+      "repo_path": "backend/config/model_a_features.json",
+      "required": true,
+      "sha256": "c4a58d71c1728b4c88d6a336d5306c7bc92009ef89d0083a1543101758f1a739"
+    },
+    {
+      "repo_path": "backend/config/model_b.json",
+      "required": true,
+      "sha256": "5b0bfda630525bdd749145defd44967a1dc09f794facda34482daee818fdc59a"
+    },
+    {
+      "repo_path": "backend/config/model_c.json",
+      "required": true,
+      "sha256": "c84f6197ce2fad2ef3195685d9b3b6c72008a59d75be2f828cfa1465fddbccbc"
+    },
+    {
+      "repo_path": "backend/config/source/model_a_final_config.json",
+      "required": true,
+      "sha256": "bc67a349b057cd5fa13db3300fb7cc7fe80ca4a1e3051d0caaade2edbe1bda7a"
+    },
+    {
+      "repo_path": "backend/models/MODEL_A_FINAL.joblib",
+      "required": true,
+      "sha256": "5b00758fb3c1f456a911d0cd37fe1a06328181036ac3e489371da43c1e99d5b6"
+    },
+    {
+      "repo_path": "backend/models/MODEL_C_V3_FROZEN.joblib",
+      "required": true,
+      "sha256": "ab5ecfd82c97a831863f8385b518b98654111f86fa98802591934e4cb854a2f2"
+    },
+    {
+      "repo_path": "backend/models/prithvi/Prithvi_EO_V2_300M.pt",
+      "required": false,
+      "sha256": "faab2c8b776f0723f93431747603a7ec586a54fc45473613b4322c29752486e7"
+    },
+    {
+      "repo_path": "backend/models/prithvi/config.json",
+      "required": false,
+      "sha256": "748bc314d9b0653b00e3a2eaf14b69b4c27a295d73eb0b85112fe21bd2c36aa8"
+    },
+    {
+      "repo_path": "backend/models/prithvi/prithvi_mae.py",
+      "required": false,
+      "sha256": "9cee9a8cb17c3859d6365a7e58f723e0f4c08e3e29aa4b8e6523506db70321da"
+    },
+    {
+      "repo_path": "data/bootstrap/MODEL_B_SOURCE_STATES_FINAL.csv",
+      "required": true,
+      "sha256": "18ce63c8f0e54df6e9eba90d5f58fe49fbd29b8d18a0d5b7bedca8ce0650d487"
+    },
+    {
+      "repo_path": "data/bootstrap/MODEL_C_EVENT_REPLAY_V3.parquet",
+      "required": true,
+      "sha256": "b1910fd371690e28ca1ba15608cea80d6962bf0455617ae01130f3585bb96255"
+    },
+    {
+      "repo_path": "data/bootstrap/firms_detections_2025_assigned.parquet",
+      "required": true,
+      "sha256": "729a0777b8b4b9a897615046e5edf1158aa1adca3cc4bc0f9286cae307f228de"
+    },
+    {
+      "repo_path": "data/bootstrap/site_daily_activity.parquet",
+      "required": true,
+      "sha256": "a863995d38d1816fc53ad13214a7dc966fabe94e5526d9bac9a08fd9de9caf0f"
+    },
+    {
+      "repo_path": "data/bootstrap/source_site_features_2025.parquet",
+      "required": true,
+      "sha256": "fd54ab908996f7bbedd218b765623bb1439010401b0005ec86aa5593ca4b8f70"
+    },
+    {
+      "repo_path": "data/bootstrap/source_sites_ground_truth_FINAL.csv",
+      "required": true,
+      "sha256": "cc1ed8781f1384afa427750d70ded819cef452f1f6f50c18f3eb3d759c748029"
+    }
+  ],
+  "feature_validation": "PASS",
+  "generated_at": "2026-09-08T12:33:34.688171+00:00",
+  "model_stack_version": "2026-09-04-r1",
+  "schema_version": "1.0",
+  "status": "READY_FOR_BOOTSTRAP"
+}

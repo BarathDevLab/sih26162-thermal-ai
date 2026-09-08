@@ -1,490 +1,550 @@
-"""
-Live Incremental Ingestion & Operational Rescoring Pipeline
-Executes the incremental processing loop for incoming NASA FIRMS active fire hotspots:
-1. Normalizes and deduplicates detections
-2. Spatially resolves detections against physical sites (750m Haversine) and candidate accumulators
-3. Upserts raw detections and updates today's site_daily_activity in PostgreSQL
-4. For touched sites: recomputes Model B temporal state and Model C anomaly scores
-5. Evaluates Unified Decision Engine and emits/escalates operational alerts
-6. Enqueues uncertain/high-priority sites to background Prithvi worker queue
-"""
+"""Transactional live FIRMS processing for the source-centric A+B+C stack."""
 
-import time
-import uuid
+from __future__ import annotations
+
 import logging
-from datetime import datetime, date, timezone
-from typing import List, Dict, Any, Optional, Set, Tuple
+import os
+import uuid
+from datetime import date, datetime, timezone
+from typing import Any, Dict, List, Optional, Set, Tuple
 
-import pandas as pd
-import numpy as np
 from sqlalchemy.orm import Session
 
 from backend.app.db.models import (
-    SourceSite,
-    FirmsDetection,
+    Alert,
     CandidateSource,
+    CandidateSourceDetection,
+    FirmsDetection,
+    IngestionRun,
     SiteDailyActivity,
     SiteModelA,
     SiteModelB,
+    SiteModelBHistory,
     SiteModelC,
-    SiteDailyInference,
-    Alert,
-    IngestionRun
+    SourceSite,
 )
-from backend.app.engines.source_resolver import SourceResolver
-from backend.app.engines.model_b import ModelBEngine
-from backend.app.engines.model_c import ModelCEngine
 from backend.app.engines.decision_engine import DecisionEngine
+from backend.app.engines.model_b import ModelBEngine
+from backend.app.engines.source_resolver import SourceResolver
 from backend.app.services.firms_ingestion import FirmsIngestionService
+from backend.app.services.model_a_service import ModelAInputUnavailable, ModelAService
+from backend.app.services.model_c_replay_service import ModelCReplayService
 from backend.app.services.prithvi_queue import enqueue_site_for_prithvi
+from backend.app.services.stack_readiness import get_shared_model_a, get_shared_model_c
+
 
 logger = logging.getLogger(__name__)
+MODEL_VERSION = os.environ.get("MODEL_STACK_VERSION", "2026-09-04-r1")
+PRIMARY_SENSOR = os.environ.get("FIRMS_PRIMARY_SOURCE", "VIIRS_NOAA20_NRT")
 
 
 class LivePipelineService:
-    def __init__(self):
-        self.resolver = SourceResolver(eps_m=750.0, min_samples=3)
-        self.ingestion_service = FirmsIngestionService(source_resolver=self.resolver)
-        self.model_b_engine = ModelBEngine()
-        self.model_c_engine = ModelCEngine()
-        self.decision_engine = DecisionEngine()
+    def __init__(self) -> None:
+        self.resolver = SourceResolver()
+        self.ingestion = FirmsIngestionService(self.resolver)
+        self.model_b = ModelBEngine()
+        self.model_c_replay = ModelCReplayService(
+            model_c=get_shared_model_c(), model_b=self.model_b
+        )
+        self.decision = DecisionEngine()
+        self._model_a: Optional[ModelAService] = None
         self._resolver_initialized = False
 
-    def ensure_resolver_loaded(self, db: Session):
-        """Loads all existing physical sites into the 750m BallTree if not already done."""
-        if self._resolver_initialized and self.resolver.site_tree is not None:
-            return
+    @property
+    def model_a(self) -> ModelAService:
+        if self._model_a is None:
+            self._model_a = ModelAService(engine=get_shared_model_a())
+        return self._model_a
 
-        t0 = time.time()
-        sites = db.query(SourceSite.site_id, SourceSite.latitude, SourceSite.longitude).all()
-        records = [
-            {"site_id": s[0], "latitude": float(s[1]), "longitude": float(s[2])}
-            for s in sites
-        ]
-        self.resolver.load_sites(records)
+    def ensure_resolver_loaded(self, db: Session) -> None:
+        if self._resolver_initialized:
+            return
+        members = (
+            db.query(
+                FirmsDetection.detection_id,
+                FirmsDetection.source_site_id,
+                FirmsDetection.latitude,
+                FirmsDetection.longitude,
+            )
+            .filter(FirmsDetection.source_site_id.isnot(None))
+            .all()
+        )
+        self.resolver.load_members(
+            [
+                {
+                    "detection_id": row[0],
+                    "site_id": row[1],
+                    "latitude": row[2],
+                    "longitude": row[3],
+                }
+                for row in members
+            ]
+        )
+        candidates = db.query(CandidateSource).filter_by(status="ACCUMULATING").all()
+        candidate_payloads = []
+        for candidate in candidates:
+            candidate_members = (
+                db.query(CandidateSourceDetection)
+                .filter_by(candidate_id=candidate.candidate_id)
+                .all()
+            )
+            candidate_payloads.append(
+                {
+                    "candidate_id": candidate.candidate_id,
+                    "latitude": candidate.latitude,
+                    "longitude": candidate.longitude,
+                    "detection_count": candidate.detection_count,
+                    "detections": [
+                        {
+                            "detection_id": member.detection_id,
+                            "latitude": member.latitude,
+                            "longitude": member.longitude,
+                        }
+                        for member in candidate_members
+                    ],
+                }
+            )
+        self.resolver.load_candidates(candidate_payloads)
         self._resolver_initialized = True
-        logger.info(f"SourceResolver spatial tree loaded with {len(records)} sites in {time.time()-t0:.2f}s.")
+        logger.info(
+            "Resolver loaded with %d member points and %d persistent candidates.",
+            len(members),
+            len(candidates),
+        )
 
     def process_detections_batch(
         self,
         raw_records: List[Dict[str, Any]],
         db: Session,
-        source_sensor: str = "VIIRS_NOAA20_NRT"
+        source_sensor: str = PRIMARY_SENSOR,
+        as_of_date: Optional[date] = None,
+        refresh_models: bool = True,
     ) -> Dict[str, Any]:
-        """
-        Processes an incoming batch of raw FIRMS hotspots.
-        """
-        run_id = f"RUN_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
-        t_start = datetime.now(timezone.utc)
-        logger.info(f"Starting live ingestion {run_id} with {len(raw_records)} detections.")
-
-        ingestion_run = IngestionRun(
-            run_id=run_id,
+        run = IngestionRun(
+            run_id=f"RUN_{uuid.uuid4().hex}",
             source=source_sensor,
-            started_at=t_start,
+            started_at=datetime.now(timezone.utc),
             records_read=len(raw_records),
-            status="RUNNING"
+            status="RUNNING",
         )
-        db.add(ingestion_run)
+        db.add(run)
         db.commit()
-
         if not raw_records:
-            ingestion_run.status = "COMPLETED"
-            ingestion_run.ended_at = datetime.now(timezone.utc)
+            run.status = "COMPLETED"
+            run.ended_at = datetime.now(timezone.utc)
             db.commit()
-            return {"status": "EMPTY", "processed": 0, "alerts_generated": 0}
+            return {"status": "EMPTY", "processed_count": 0, "alerts_generated": 0}
 
         try:
             self.ensure_resolver_loaded(db)
-
-            # Query existing detection IDs to deduplicate against database
-            # Sample recent 3-day detection IDs for fast in-memory check
-            cutoff_date = date.today()
-            recent_det_ids = set(
-                r[0] for r in db.query(FirmsDetection.detection_id)
-                .filter(FirmsDetection.acq_date >= cutoff_date)
+            normalized = self._normalize_unique(raw_records, source_sensor)
+            existing = {
+                row.detection_id: row
+                for row in db.query(FirmsDetection)
+                .filter(FirmsDetection.detection_id.in_(normalized))
                 .all()
-            )
+            }
+            touched_days: Set[Tuple[str, date]] = set()
+            promoted_sites: List[str] = []
+            inserted = 0
+            revised = 0
+            unchanged = 0
 
-            # Ingest, normalize, deduplicate, and spatially resolve
-            ingest_result = self.ingestion_service.ingest_batch(
-                raw_records=raw_records,
-                source_sensor=source_sensor,
-                existing_ids=recent_det_ids
-            )
-
-            resolved_dets = ingest_result["resolved_detections"]
-            promoted_sites = ingest_result.get("promoted_sites", [])
-
-            # 1. Persist Promoted Sites in PostgreSQL
-            now_iso = datetime.now(timezone.utc)
-            for ps in promoted_sites:
-                new_site_id = ps["site_id"]
-                new_site = SourceSite(
-                    site_id=new_site_id,
-                    latitude=float(ps["latitude"]),
-                    longitude=float(ps["longitude"]),
-                    status="ACTIVE",
-                    created_at=now_iso
-                )
-                db.add(new_site)
-
-                # Baseline Model A: Promoted sites start in review queue (UNKNOWN)
-                db.add(SiteModelA(
-                    site_id=new_site_id,
-                    core_probability=0.50,
-                    class_name="UNKNOWN",
-                    decision="UNKNOWN",
-                    prithvi_status="NOT_TRIGGERED",
-                    model_version="2026-09-04-r1",
-                    computed_at=now_iso
-                ))
-
-                # Baseline Model B: NEW
-                db.add(SiteModelB(
-                    site_id=new_site_id,
-                    state="NEW",
-                    confidence="HIGH",
-                    reason="Promoted from candidate accumulator (3 detections within 750m)",
-                    days_since_last=0,
-                    active_days_windows={"30d": 1, "90d": 1, "180d": 1, "365d": 1},
-                    model_version="2026-09-04-r1",
-                    computed_at=now_iso
-                ))
-
-                # Baseline Model C: INSUFFICIENT_HISTORY
-                db.add(SiteModelC(
-                    site_id=new_site_id,
-                    operational_status="INSUFFICIENT_HISTORY",
-                    c_score=None,
-                    c_raw=None,
-                    model_version="2026-09-04-r1",
-                    computed_at=now_iso
-                ))
-            db.commit()
-
-            # 2. Persist Raw Hotspots to firms_detections
-            db_detections = []
-            for d in resolved_dets:
-                acq_d = datetime.strptime(d["acq_date"][:10], "%Y-%m-%d").date() if isinstance(d["acq_date"], str) else d["acq_date"]
-                raw_meta = d.get("raw_payload") or {}
-                if not isinstance(raw_meta, dict):
-                    raw_meta = {"raw": str(raw_meta)}
-                raw_meta["resolution_status"] = d.get("resolution_status", "UNKNOWN")
-                raw_meta["distance_to_site_m"] = d.get("distance_m")
-                raw_meta["is_ambiguous"] = d.get("is_ambiguous", False)
-
-                db_detections.append(FirmsDetection(
-                    detection_id=d["detection_id"],
-                    source_sensor=d.get("source_sensor", "VIIRS_NOAA20_NRT"),
-                    satellite=d.get("satellite", "20"),
-                    instrument=d.get("instrument", "VIIRS"),
-                    latitude=d["latitude"],
-                    longitude=d["longitude"],
-                    bright_ti4=d.get("bright_ti4"),
-                    bright_ti5=d.get("bright_ti5"),
-                    frp=d.get("frp", 0.0) or 0.0,
-                    scan=d.get("scan"),
-                    track=d.get("track"),
-                    acq_date=acq_d,
-                    acq_time=d.get("acq_time", "0000"),
-                    confidence=d.get("confidence"),
-                    version=d.get("version"),
-                    daynight=d.get("daynight") or "D",
-                    source_site_id=d.get("site_id"),
-                    raw_payload=raw_meta
-                ))
-
-            if db_detections:
-                # Merge or insert new detections
-                for det in db_detections:
-                    db.merge(det)
-                db.commit()
-
-            # 3. Aggregate Daily Activity for Matched Detections
-            matched_dets = [d for d in resolved_dets if d.get("site_id")]
-            touched_site_ids: Set[str] = set(d["site_id"] for d in matched_dets)
-
-            today = date.today()
-            site_day_groups: Dict[Tuple[str, date], List[float]] = {}
-            for d in matched_dets:
-                sid = d["site_id"]
-                acq_d = datetime.strptime(d["acq_date"][:10], "%Y-%m-%d").date() if isinstance(d["acq_date"], str) else d["acq_date"]
-                frp_val = float(d.get("frp", 0.0) or 0.0)
-                key = (sid, acq_d)
-                site_day_groups.setdefault(key, []).append(frp_val)
-
-            # Upsert into site_daily_activity
-            for (sid, act_date), frp_list in site_day_groups.items():
-                existing_act = (
-                    db.query(SiteDailyActivity)
-                    .filter(SiteDailyActivity.site_id == sid, SiteDailyActivity.acq_date == act_date)
-                    .first()
-                )
-                if existing_act:
-                    new_count = existing_act.detections + len(frp_list)
-                    tot_frp = (existing_act.mean_frp * existing_act.detections) + sum(frp_list)
-                    existing_act.detections = new_count
-                    existing_act.mean_frp = round(tot_frp / new_count, 2)
-                    existing_act.max_frp = round(max(existing_act.max_frp, max(frp_list)), 2)
-                    existing_act.updated_at = datetime.now(timezone.utc)
-                else:
-                    db.add(SiteDailyActivity(
-                        site_id=sid,
-                        acq_date=act_date,
-                        detections=len(frp_list),
-                        mean_frp=round(float(np.mean(frp_list)), 2),
-                        max_frp=round(float(np.max(frp_list)), 2),
-                        updated_at=datetime.now(timezone.utc)
-                    ))
-            db.commit()
-
-            # 4. Rescore Model B, Model C, and Decision Engine for Touched Sites
-            alerts_generated = 0
-            for sid in touched_site_ids:
-                # Fetch all activity dates for site up to today
-                all_acts = (
-                    db.query(SiteDailyActivity)
-                    .filter(SiteDailyActivity.site_id == sid, SiteDailyActivity.acq_date <= today)
-                    .order_by(SiteDailyActivity.acq_date.asc())
-                    .all()
-                )
-                if not all_acts:
+            self.resolver.begin_batch()
+            for detection_id, payload in normalized.items():
+                row = existing.get(detection_id)
+                if row is not None and not self._changed(row, payload):
+                    unchanged += 1
                     continue
 
-                active_dates = [a.acq_date for a in all_acts]
-
-                # (a) Model B Recalculation
-                b_res = self.model_b_engine.predict(active_dates=active_dates, as_of_date=today)
-                b_stats = b_res.get("stats", {})
-                mb_row = db.query(SiteModelB).filter(SiteModelB.site_id == sid).first()
-                b_windows = {
-                    "30d": b_stats.get("active_days_30", 0),
-                    "90d": b_stats.get("active_days_90", 0),
-                    "180d": b_stats.get("active_days_180", 0),
-                    "365d": b_stats.get("active_days_365", 0),
-                }
-                if mb_row:
-                    mb_row.state = b_res["state"]
-                    mb_row.confidence = b_res["confidence"]
-                    mb_row.reason = b_res["reason"]
-                    mb_row.days_since_last = int(b_stats.get("days_since_last", 0))
-                    mb_row.active_days_windows = b_windows
-                    mb_row.computed_at = datetime.now(timezone.utc)
+                resolution = self._resolve(payload, row)
+                promoted_site_id = None
+                if resolution["status"] == "PROMOTED":
+                    # The referenced source row must exist before the detection FK is flushed.
+                    promoted_site_id = self._persist_promotion(db, resolution)
+                    promoted_sites.append(promoted_site_id)
+                if row is None:
+                    row = FirmsDetection(detection_id=detection_id)
+                    db.add(row)
+                    inserted += 1
                 else:
-                    db.add(SiteModelB(
-                        site_id=sid,
-                        state=b_res["state"],
-                        confidence=b_res["confidence"],
-                        reason=b_res["reason"],
-                        days_since_last=int(b_stats.get("days_since_last", 0)),
-                        active_days_windows=b_windows,
-                        model_version="2026-09-04-r1",
-                        computed_at=datetime.now(timezone.utc)
-                    ))
+                    if row.source_site_id:
+                        touched_days.add((row.source_site_id, row.acq_date))
+                    revised += 1
+                self._apply_detection(row, payload, resolution)
+                db.flush()
 
-                # (b) Model C Recalculation (prior completed days vs today)
-                prior_acts = [a for a in all_acts if a.acq_date < today]
-                today_act = next((a for a in all_acts if a.acq_date == today), None)
+                if resolution["status"] in ("NEW_CANDIDATE", "CANDIDATE_ACCUMULATED"):
+                    self._persist_candidate(db, resolution["candidate_id"], row)
+                elif resolution["status"] == "PROMOTED":
+                    site_id = promoted_site_id
+                    for member in resolution.get("member_detections", []):
+                        member_id = member.get("detection_id")
+                        member_row = db.query(FirmsDetection).filter_by(detection_id=member_id).one_or_none()
+                        if member_row:
+                            member_row.source_site_id = site_id
+                            member_row.resolution_status = "PROMOTED_MEMBER"
+                            touched_days.add((site_id, member_row.acq_date))
+                            self._persist_promoted_member(
+                                db, resolution["candidate_id"], member_row
+                            )
 
-                c_status = "INSUFFICIENT_HISTORY"
-                c_score = None
-                c_raw = None
-                c_drivers = None
+                if row.source_site_id:
+                    touched_days.add((row.source_site_id, row.acq_date))
 
-                if today_act:
-                    prior_history = [
-                        {
-                            "site_id": a.site_id,
-                            "acq_date": str(a.acq_date),
-                            "detections": a.detections,
-                            "mean_frp": a.mean_frp,
-                            "max_frp": a.max_frp
-                        }
-                        for a in prior_acts
-                    ]
-                    current_day_dict = {
-                        "site_id": today_act.site_id,
-                        "acq_date": str(today_act.acq_date),
-                        "detections": today_act.detections,
-                        "mean_frp": today_act.mean_frp,
-                        "max_frp": today_act.max_frp
-                    }
+            self.resolver.end_batch()
+            db.flush()
+            touched_sites = {site_id for site_id, _ in touched_days}
+            for site_id, activity_date in sorted(touched_days):
+                self._rebuild_daily_activity(db, site_id, activity_date)
+            for site_id in touched_sites:
+                self._update_latest_seen(db, site_id)
 
-                    c_res = self.model_c_engine.score(prior_history, current_day_dict)
-                    c_status = c_res["status"]
-                    c_score = c_res.get("c_score")
-                    c_raw = c_res.get("c_raw")
-                    c_drivers = c_res.get("drivers")
+            if not refresh_models:
+                run.inserted = inserted
+                run.updated = revised
+                run.failed = 0
+                run.status = "COMPLETED"
+                run.ended_at = datetime.now(timezone.utc)
+                db.commit()
+                return {
+                    "run_id": run.run_id,
+                    "status": run.status,
+                    "processed_count": len(raw_records),
+                    "unique_count": len(normalized),
+                    "inserted_count": inserted,
+                    "revised_count": revised,
+                    "unchanged_count": unchanged,
+                    "promoted_count": len(promoted_sites),
+                    "touched_sites_count": len(touched_sites),
+                    "alerts_generated": 0,
+                    "model_a_unavailable": {},
+                    "models_deferred": True,
+                }
 
-                    # Upsert into site_daily_inference
-                    inf_row = (
-                        db.query(SiteDailyInference)
-                        .filter(SiteDailyInference.site_id == sid, SiteDailyInference.acq_date == today)
-                        .first()
-                    )
-                    if inf_row:
-                        inf_row.model_c_status = c_status
-                        inf_row.c_score = c_score
-                        inf_row.c_raw = c_raw
-                        inf_row.drivers = c_drivers
-                        inf_row.evidence_99 = c_res.get("evidence_99", 0)
-                        inf_row.computed_at = datetime.now(timezone.utc)
-                    else:
-                        db.add(SiteDailyInference(
-                            site_id=sid,
-                            acq_date=today,
-                            model_c_status=c_status,
-                            c_score=c_score,
-                            c_raw=c_raw,
-                            drivers=c_drivers,
-                            evidence_99=c_res.get("evidence_99", 0),
-                            model_c_version="2026-09-04-r1",
-                            model_b_state=b_res["state"],
-                            computed_at=datetime.now(timezone.utc)
-                        ))
+            model_a_errors: Dict[str, str] = {}
+            model_a_results: Dict[str, Dict[str, Any]] = {}
+            for site_id in touched_sites:
+                try:
+                    model_a_results[site_id] = self.model_a.score_site(db, site_id)
+                except ModelAInputUnavailable as exc:
+                    model_a_errors[site_id] = str(exc)
 
-                    # Update latest site_model_c
-                    mc_row = db.query(SiteModelC).filter(SiteModelC.site_id == sid).first()
-                    if mc_row:
-                        mc_row.operational_status = c_status
-                        mc_row.c_score = c_score
-                        mc_row.c_raw = c_raw
-                        mc_row.drivers = c_drivers
-                        mc_row.evidence_99 = c_res.get("evidence_99", 0)
-                        mc_row.event_date = today
-                        mc_row.computed_at = datetime.now(timezone.utc)
-
-                # (c) Decision Engine Evaluation & Alert Dispatch
-                ma_row = db.query(SiteModelA).filter(SiteModelA.site_id == sid).first()
-                a_class = ma_row.class_name if ma_row else "UNKNOWN"
-                core_prob = float(ma_row.core_probability) if ma_row else 0.5
-
-                existing_alert = (
-                    db.query(Alert)
-                    .filter(Alert.site_id == sid, Alert.status == "ACTIVE")
-                    .order_by(Alert.created_at.desc())
-                    .first()
-                )
-                existing_alert_dict = None
-                if existing_alert:
-                    existing_alert_dict = {
-                        "alert_level": existing_alert.alert_level,
-                        "alert_type": existing_alert.alert_type,
-                        "created_at": existing_alert.created_at.isoformat() if existing_alert.created_at else None
-                    }
-
-                alert_dict = self.decision_engine.evaluate(
-                    site_id=sid,
-                    site_day=str(today),
-                    model_a_result={"decision": a_class, "probability": core_prob},
-                    model_b_result={"state": b_res["state"]},
-                    model_c_result={"status": c_status, "c_score": c_score},
-                    existing_alert=existing_alert_dict
-                )
-
-                if alert_dict and alert_dict.get("alert_level") not in ("NONE", "INFO"):
-                    now_utc = datetime.now(timezone.utc)
-                    fp = alert_dict.get("alert_fingerprint")
-                    existing_fp_alert = db.query(Alert).filter(Alert.fingerprint == fp).first() if fp else None
-                    if existing_fp_alert:
-                        existing_fp_alert.alert_level = alert_dict["alert_level"]
-                        existing_fp_alert.alert_type = alert_dict["alert_type"]
-                        existing_fp_alert.headline = alert_dict["headline"]
-                        existing_fp_alert.updated_at = now_utc
-                    else:
-                        new_alert = Alert(
-                            alert_id=f"ALT_{uuid.uuid4().hex[:12]}",
-                            site_id=sid,
-                            site_day=today,
-                            alert_type=alert_dict["alert_type"],
-                            alert_level=alert_dict["alert_level"],
-                            headline=alert_dict["headline"],
-                            reason_codes=alert_dict.get("reason_codes"),
-                            evidence_required=alert_dict.get("evidence_required", False),
-                            fingerprint=fp or f"FP_{uuid.uuid4().hex[:12]}",
-                            status="ACTIVE",
-                            is_escalation=alert_dict.get("is_escalation", False),
-                            created_at=now_utc,
-                            updated_at=now_utc
-                        )
-                        db.add(new_alert)
-                    alerts_generated += 1
-
-                # (d) Enqueue for Prithvi Worker if uncertain or high alert
-                if (0.405 <= core_prob < 0.885) or (alert_dict and alert_dict.get("alert_level") in ("HIGH", "CRITICAL")):
-                    enqueue_site_for_prithvi(sid)
-
-            db.commit()
-
-            # Telemetry update
-            ingestion_run.inserted = len(db_detections)
-            ingestion_run.updated = len(touched_site_ids)
-            ingestion_run.status = "COMPLETED"
-            ingestion_run.ended_at = datetime.now(timezone.utc)
-            db.commit()
-
-            return {
-                "run_id": run_id,
-                "status": "COMPLETED",
-                "processed_count": len(raw_records),
-                "unique_count": ingest_result["unique_count"],
-                "duplicate_count": ingest_result["duplicate_count"],
-                "matched_count": ingest_result["matched_count"],
-                "promoted_count": ingest_result["promoted_count"],
-                "touched_sites_count": len(touched_site_ids),
-                "alerts_generated": alerts_generated
+            temporal_cutoff = as_of_date or date.today()
+            b_results = {
+                site_id: self._refresh_model_b_site(db, site_id, temporal_cutoff)
+                for site_id in touched_sites
             }
-        except Exception as e:
-            logger.error(f"Error executing live ingestion {run_id}: {e}", exc_info=True)
-            db.rollback()
-            ingestion_run.status = "FAILED"
-            ingestion_run.error_summary = str(e)
-            ingestion_run.ended_at = datetime.now(timezone.utc)
+            c_results = {
+                site_id: self.model_c_replay.replay_site(db, site_id, cutoff=temporal_cutoff)
+                for site_id in touched_sites
+            }
+
+            alerts_generated = 0
+            for site_id in touched_sites:
+                a_result = model_a_results.get(site_id)
+                if a_result is None:
+                    continue
+                c_latest = c_results[site_id].get("latest") or {"status": "INSUFFICIENT_HISTORY"}
+                site_day = c_results[site_id].get("event_date") or temporal_cutoff
+                alerts_generated += self._evaluate_alert(
+                    db, site_id, site_day, a_result, b_results[site_id], c_latest
+                )
+                if a_result.get("should_queue_prithvi"):
+                    enqueue_site_for_prithvi(site_id)
+
+            run.inserted = inserted
+            run.updated = revised
+            run.failed = len(model_a_errors)
+            run.status = "COMPLETED" if not model_a_errors else "COMPLETED_DEGRADED"
+            run.ended_at = datetime.now(timezone.utc)
             db.commit()
+            return {
+                "run_id": run.run_id,
+                "status": run.status,
+                "processed_count": len(raw_records),
+                "unique_count": len(normalized),
+                "inserted_count": inserted,
+                "revised_count": revised,
+                "unchanged_count": unchanged,
+                "promoted_count": len(promoted_sites),
+                "touched_sites_count": len(touched_sites),
+                "alerts_generated": alerts_generated,
+                "model_a_unavailable": model_a_errors,
+            }
+        except Exception as exc:
+            db.rollback()
+            # Resolution mutates an in-memory spatial/candidate index. Discard it
+            # after a failed transaction so the next batch reloads committed DB state.
+            self.resolver = SourceResolver()
+            self.ingestion.resolver = self.resolver
+            self._resolver_initialized = False
+            persisted_run = db.query(IngestionRun).filter_by(run_id=run.run_id).one_or_none()
+            if persisted_run:
+                persisted_run.status = "FAILED"
+                persisted_run.failed = 1
+                persisted_run.error_summary = str(exc)
+                persisted_run.ended_at = datetime.now(timezone.utc)
+                db.commit()
             raise
+
+    def _normalize_unique(self, raw_records: List[Dict[str, Any]], source_sensor: str) -> Dict[str, dict]:
+        normalized: Dict[str, dict] = {}
+        for raw in raw_records:
+            payload = self.ingestion.normalize_record(raw, source_sensor=source_sensor)
+            normalized[payload["detection_id"]] = payload
+        return normalized
+
+    def _resolve(self, payload: dict, existing: Optional[FirmsDetection]) -> dict:
+        if existing is not None and existing.latitude == payload["latitude"] and existing.longitude == payload["longitude"]:
+            return {
+                "status": existing.resolution_status or ("MATCHED" if existing.source_site_id else "UNRESOLVED"),
+                "site_id": existing.source_site_id,
+                "distance_m": existing.assignment_distance_m,
+                "is_ambiguous": existing.is_ambiguous,
+                "candidate_site_ids": existing.candidate_site_ids or [],
+            }
+        return self.resolver.resolve_detection(
+            payload["latitude"],
+            payload["longitude"],
+            payload["detection_id"],
+            payload,
+        )
+
+    @staticmethod
+    def _changed(row: FirmsDetection, payload: dict) -> bool:
+        fields = (
+            "source_sensor", "satellite", "instrument", "latitude", "longitude",
+            "acq_date", "acq_time", "frp", "bright_ti4", "bright_ti5", "scan",
+            "track", "confidence", "daynight", "version",
+        )
+        for field in fields:
+            incoming = payload.get(field)
+            if field == "acq_date" and isinstance(incoming, str):
+                incoming = datetime.strptime(incoming[:10], "%Y-%m-%d").date()
+            if getattr(row, field) != incoming:
+                return True
+        return False
+
+    @staticmethod
+    def _apply_detection(row: FirmsDetection, payload: dict, resolution: dict) -> None:
+        for field in (
+            "source_sensor", "satellite", "instrument", "latitude", "longitude",
+            "acq_date", "acq_time", "frp", "bright_ti4", "bright_ti5", "scan",
+            "track", "confidence", "daynight", "version", "raw_payload",
+        ):
+            value = payload.get(field)
+            if field == "acq_date" and isinstance(value, str):
+                value = datetime.strptime(value[:10], "%Y-%m-%d").date()
+            setattr(row, field, value)
+        row.source_site_id = resolution.get("site_id")
+        row.resolution_status = resolution.get("status")
+        row.is_ambiguous = bool(resolution.get("is_ambiguous", False))
+        row.candidate_site_ids = resolution.get("candidate_site_ids") or None
+        row.assignment_distance_m = resolution.get("distance_m")
+        row.ingested_at = datetime.now(timezone.utc)
+
+    def _persist_candidate(self, db: Session, candidate_id: str, detection: FirmsDetection) -> None:
+        state = self.resolver.candidates[candidate_id]
+        candidate = db.query(CandidateSource).filter_by(candidate_id=candidate_id).one_or_none()
+        if candidate is None:
+            candidate = CandidateSource(candidate_id=candidate_id, first_seen=datetime.now(timezone.utc))
+            db.add(candidate)
+        candidate.latitude = state["latitude"]
+        candidate.longitude = state["longitude"]
+        candidate.detection_count = state["detection_count"]
+        candidate.last_seen = datetime.now(timezone.utc)
+        candidate.status = "ACCUMULATING"
+        member = db.query(CandidateSourceDetection).filter_by(
+            candidate_id=candidate_id, detection_id=detection.detection_id
+        ).one_or_none()
+        if member is None:
+            db.add(CandidateSourceDetection(
+                candidate_id=candidate_id,
+                detection_id=detection.detection_id,
+                latitude=detection.latitude,
+                longitude=detection.longitude,
+                observed_at=datetime.combine(detection.acq_date, datetime.min.time(), tzinfo=timezone.utc),
+            ))
+
+    @staticmethod
+    def _persist_promoted_member(
+        db: Session, candidate_id: str, detection: FirmsDetection
+    ) -> None:
+        member = db.query(CandidateSourceDetection).filter_by(
+            candidate_id=candidate_id, detection_id=detection.detection_id
+        ).one_or_none()
+        if member is None:
+            db.add(CandidateSourceDetection(
+                candidate_id=candidate_id,
+                detection_id=detection.detection_id,
+                latitude=detection.latitude,
+                longitude=detection.longitude,
+                observed_at=datetime.combine(
+                    detection.acq_date, datetime.min.time(), tzinfo=timezone.utc
+                ),
+            ))
+
+    @staticmethod
+    def _persist_promotion(db: Session, resolution: dict) -> str:
+        site_id = resolution["site_id"]
+        if db.query(SourceSite).filter_by(site_id=site_id).one_or_none() is None:
+            db.add(SourceSite(
+                site_id=site_id,
+                latitude=resolution["latitude"],
+                longitude=resolution["longitude"],
+                status="PROMOTED",
+                promoted_at=datetime.now(timezone.utc),
+            ))
+            db.flush()
+        candidate = db.query(CandidateSource).filter_by(
+            candidate_id=resolution["candidate_id"]
+        ).one_or_none()
+        if candidate:
+            candidate.status = "PROMOTED"
+            candidate.promoted_site_id = site_id
+        return site_id
+
+    @staticmethod
+    def _rebuild_daily_activity(db: Session, site_id: str, activity_date: date) -> None:
+        rows = db.query(FirmsDetection).filter_by(
+            source_site_id=site_id, acq_date=activity_date
+        ).all()
+        activity = db.query(SiteDailyActivity).filter_by(
+            site_id=site_id, acq_date=activity_date
+        ).one_or_none()
+        if not rows:
+            if activity:
+                db.delete(activity)
+            return
+        frps = [float(row.frp or 0.0) for row in rows]
+        if activity is None:
+            activity = SiteDailyActivity(site_id=site_id, acq_date=activity_date)
+            db.add(activity)
+        activity.detections = len(rows)
+        activity.mean_frp = sum(frps) / len(frps)
+        activity.max_frp = max(frps)
+        activity.updated_at = datetime.now(timezone.utc)
+
+    @staticmethod
+    def _update_latest_seen(db: Session, site_id: str) -> None:
+        latest = (
+            db.query(FirmsDetection.acq_date)
+            .filter(FirmsDetection.source_site_id == site_id)
+            .order_by(FirmsDetection.acq_date.desc())
+            .first()
+        )
+        site = db.query(SourceSite).filter_by(site_id=site_id).one()
+        site.latest_seen = latest[0] if latest else None
+
+    def _refresh_model_b_site(self, db: Session, site_id: str, as_of_date: date) -> dict:
+        active_dates = [
+            row[0]
+            for row in db.query(SiteDailyActivity.acq_date)
+            .filter(SiteDailyActivity.site_id == site_id, SiteDailyActivity.acq_date <= as_of_date)
+            .order_by(SiteDailyActivity.acq_date)
+            .all()
+        ]
+        result = self.model_b.predict(active_dates, as_of_date=as_of_date)
+        stats = result.get("stats", {})
+        windows = {key: stats.get(f"active_days_{key}", 0) for key in ("30", "90", "180", "365")}
+        row = db.query(SiteModelB).filter_by(site_id=site_id).one_or_none()
+        latest_history_date = (
+            db.query(SiteModelBHistory.as_of_date)
+            .filter(SiteModelBHistory.site_id == site_id)
+            .order_by(SiteModelBHistory.as_of_date.desc())
+            .first()
+        )
+        materialize_latest = latest_history_date is None or as_of_date >= latest_history_date[0]
+        computed_at = datetime.now(timezone.utc)
+        if materialize_latest:
+            if row is None:
+                row = SiteModelB(site_id=site_id)
+                db.add(row)
+            row.state = result["state"]
+            row.confidence = result["confidence"]
+            row.reason = result["reason"]
+            row.days_since_last = stats.get("days_since_last")
+            row.active_days_windows = windows
+            row.model_version = MODEL_VERSION
+            row.computed_at = computed_at
+        history = db.query(SiteModelBHistory).filter_by(
+            site_id=site_id, as_of_date=as_of_date
+        ).one_or_none()
+        if history is None:
+            history = SiteModelBHistory(site_id=site_id, as_of_date=as_of_date)
+            db.add(history)
+        history.state = result["state"]
+        history.confidence = result["confidence"]
+        history.reason = result["reason"]
+        history.days_since_last = stats.get("days_since_last")
+        history.active_days_windows = windows
+        history.model_version = MODEL_VERSION
+        history.computed_at = computed_at
+        return result
+
+    def _evaluate_alert(self, db, site_id, site_day, a_result, b_result, c_result) -> int:
+        existing = (
+            db.query(Alert)
+            .filter(Alert.site_id == site_id, Alert.site_day == site_day, Alert.status == "ACTIVE")
+            .order_by(Alert.created_at.desc())
+            .first()
+        )
+        existing_payload = None
+        if existing:
+            existing_payload = {
+                "alert_level": existing.alert_level,
+                "alert_type": existing.alert_type,
+                "created_at": existing.created_at.isoformat(),
+            }
+        alert = self.decision.evaluate(
+            site_id=site_id,
+            site_day=site_day.isoformat(),
+            model_a_result={"decision": a_result["decision"]},
+            model_b_result=b_result,
+            model_c_result=c_result,
+            existing_alert=existing_payload,
+        )
+        if alert["alert_level"] in ("NONE", "INFO"):
+            return 0
+        fingerprint = alert["alert_fingerprint"]
+        row = db.query(Alert).filter_by(fingerprint=fingerprint).one_or_none()
+        if row is None:
+            row = Alert(
+                alert_id=f"ALT_{uuid.uuid4().hex}",
+                site_id=site_id,
+                site_day=site_day,
+                fingerprint=fingerprint,
+                status="ACTIVE",
+            )
+            db.add(row)
+        row.alert_type = alert["alert_type"]
+        row.alert_level = alert["alert_level"]
+        row.headline = alert["headline"]
+        row.reason_codes = alert["reason_codes"]
+        row.evidence_required = alert["evidence_required"]
+        row.is_escalation = alert["is_escalation"]
+        row.updated_at = datetime.now(timezone.utc)
+        return 1
 
 
 def run_global_daily_model_b_refresh(db: Session, as_of_date: Optional[date] = None) -> Dict[str, Any]:
-    """
-    Daily maintenance task to decay Model B temporal states for sites with no activity today.
-    A site active 31 days ago was PERSISTENT or INTERMITTENT, but today slips to DORMANT.
-    """
+    """Recompute every site with the real deterministic engine at the new cutoff."""
+    service = get_live_pipeline_service()
     ref_date = as_of_date or date.today()
-    logger.info(f"Running global daily Model B decay refresh for {ref_date}...")
-
-    # Query all sites where state is not already DORMANT
-    active_b_rows = (
-        db.query(SiteModelB)
-        .filter(SiteModelB.state.in_(["PERSISTENT", "INTERMITTENT", "REACTIVATED", "NEW"]))
-        .all()
-    )
-
-    decayed_to_dormant = 0
-    now_utc = datetime.now(timezone.utc)
-
-    for mb in active_b_rows:
-        # Check days since last
-        if mb.days_since_last is not None:
-            mb.days_since_last += 1
-            if mb.days_since_last > 30 and mb.state in ("PERSISTENT", "INTERMITTENT", "REACTIVATED", "NEW"):
-                mb.state = "DORMANT"
-                mb.reason = f"Observation gap reached {mb.days_since_last}d (>30d decay threshold)"
-                mb.computed_at = now_utc
-                decayed_to_dormant += 1
-
+    site_ids = [row[0] for row in db.query(SourceSite.site_id).all()]
+    for site_id in site_ids:
+        service._refresh_model_b_site(db, site_id, ref_date)
     db.commit()
-    logger.info(f"Global daily Model B refresh complete: {decayed_to_dormant} sites transitioned to DORMANT.")
     return {
         "status": "COMPLETED",
-        "as_of_date": str(ref_date),
-        "sites_evaluated": len(active_b_rows),
-        "decayed_to_dormant": decayed_to_dormant
+        "as_of_date": ref_date.isoformat(),
+        "sites_evaluated": len(site_ids),
     }
 
 
-# Global singleton instance
 _live_pipeline: Optional[LivePipelineService] = None
+
 
 def get_live_pipeline_service() -> LivePipelineService:
     global _live_pipeline

@@ -1,72 +1,78 @@
-"""
-Tests for Satellite Imagery Service & Prithvi Visual Scoring Engine
-"""
+"""Regression tests for the fail-closed HLS/Prithvi boundary."""
 
+from datetime import date
+
+import numpy as np
 import pytest
-from backend.app.services.imagery_service import (
-    fetch_satellite_patch_bytes,
-    analyze_multispectral_patch,
-    get_or_create_site_imagery,
-    PRITHVI_RESCUE_THRESHOLD
+
+from backend.app.services.hls_service import (
+    HLSPatch, HLSCloudRejected, HLSService, HLSUnavailable,
 )
-from backend.app.db.session import SessionLocal
-from backend.app.db.models import SourceSite, SiteModelA, ImageryCache
+from backend.app.services.prithvi_service import PrithviService, PrithviUnavailable
 
 
-def test_fetch_satellite_patch_bytes():
-    # Test fetch for Delhi coords
-    png_bytes, provider = fetch_satellite_patch_bytes(28.6139, 77.2090)
-    assert len(png_bytes) > 500
-    assert png_bytes.startswith(b"\x89PNG")
-    assert provider in ["ESRI_WORLD_IMAGERY", "SYNTHETIC_PROCEDURAL"]
+def test_missing_hls_cache_stays_unavailable(tmp_path):
+    service = HLSService(cache_dir=str(tmp_path))
+    with pytest.raises(HLSUnavailable):
+        service.load_cached_patch("SITE_MISSING", date(2026, 1, 1))
 
 
-def test_analyze_multispectral_patch():
-    png_bytes, _ = fetch_satellite_patch_bytes(28.6139, 77.2090)
-    analysis = analyze_multispectral_patch(
-        png_bytes,
-        land_cover={"built_fraction": 0.85, "bare_fraction": 0.1},
-        core_probability=0.92
+def test_genuine_hls_cache_contract(tmp_path):
+    site_id = "SITE_A"
+    acquisition_date = date(2026, 1, 2)
+    target = tmp_path / site_id
+    target.mkdir()
+    np.savez_compressed(
+        target / f"{acquisition_date.isoformat()}.npz",
+        product=np.array("HLSS30"),
+        bands=np.ones((6, 224, 224), dtype=np.float32),
+        cloud_fraction=np.array(0.1),
+        source_uri=np.array("earthdata://HLS/SITE_A/2026-01-02"),
     )
-
-    assert "cloud_fraction" in analysis
-    assert 0.0 <= analysis["cloud_fraction"] <= 1.0
-
-    assert "bands_mean" in analysis
-    bands = analysis["bands_mean"]
-    for b in ["B02_Blue", "B03_Green", "B04_Red", "B05_NIR", "B06_SWIR1", "B07_SWIR2"]:
-        assert b in bands
-        assert bands[b] >= 0.0
-
-    assert "prithvi_probability" in analysis
-    assert 0.0 <= analysis["prithvi_probability"] <= 1.0
-    assert "visual_class" in analysis
-    assert "morphology_summary" in analysis
+    patch = HLSService(cache_dir=str(tmp_path)).load_cached_patch(site_id, acquisition_date)
+    assert patch.bands.shape == (6, 224, 224)
+    assert patch.product == "HLSS30"
+    assert patch.source_uri.startswith("earthdata://")
 
 
-def test_imagery_service_guarded_rescue():
-    db = SessionLocal()
+def test_rgb_or_procedural_patch_cannot_cross_hls_boundary():
+    patch = HLSPatch(
+        site_id="SITE_A",
+        acquisition_date=date(2026, 1, 2),
+        product="HLSS30",
+        bands=np.ones((3, 224, 224), dtype=np.float32),
+        cloud_fraction=0.1,
+        source_uri="synthetic://not-allowed",
+    )
+    with pytest.raises(ValueError):
+        patch.validate()
+
+
+def test_cloudy_hls_patch_is_rejected_without_probability():
+    patch = HLSPatch(
+        site_id="SITE_A",
+        acquisition_date=date(2026, 1, 2),
+        product="HLSS30",
+        bands=np.ones((6, 224, 224), dtype=np.float32),
+        cloud_fraction=0.9,
+        source_uri="earthdata://HLS/cloudy",
+    )
+    with pytest.raises(HLSCloudRejected):
+        patch.validate()
+
+
+def test_prithvi_never_returns_heuristic_probability():
     try:
-        # Pick any active site in database
-        site = db.query(SourceSite).first()
-        if not site:
-            pytest.skip("No sites in database to test")
-
-        summary = get_or_create_site_imagery(db, site.site_id)
-        assert summary.site_id == site.site_id
-        assert summary.product == "HLSS30"
-        assert summary.prithvi_probability is not None
-        assert summary.patch_base64 is not None
-        assert summary.patch_base64.startswith("data:image/png;base64,")
-
-        # Verify DB records updated
-        cache_row = db.query(ImageryCache).filter(ImageryCache.site_id == site.site_id).first()
-        assert cache_row is not None
-        assert cache_row.status == "AVAILABLE"
-
-        model_a_row = db.query(SiteModelA).filter(SiteModelA.site_id == site.site_id).first()
-        if model_a_row:
-            assert model_a_row.prithvi_status in ["CONFIRMED", "RESCUED", "EVALUATED"]
-            assert model_a_row.prithvi_probability == summary.prithvi_probability
-    finally:
-        db.close()
+        service = PrithviService()
+    except PrithviUnavailable:
+        return
+    patch = HLSPatch(
+        site_id="SITE_A",
+        acquisition_date=date(2026, 1, 2),
+        product="HLSS30",
+        bands=np.ones((6, 224, 224), dtype=np.float32),
+        cloud_fraction=0.1,
+        source_uri="earthdata://HLS/SITE_A/2026-01-02",
+    )
+    with pytest.raises(PrithviUnavailable):
+        service.score(patch)

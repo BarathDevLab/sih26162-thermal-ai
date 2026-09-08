@@ -57,3 +57,87 @@ def test_source_resolver_ambiguity():
     assert r['is_ambiguous'] is True
     assert set(r['candidate_site_ids']) == {'SITE_001', 'SITE_002'}
 
+
+def test_newly_matched_detection_becomes_a_member_point():
+    resolver = SourceResolver(eps_m=750.0, min_samples=3)
+    resolver.load_members([
+        {
+            'detection_id': 'FROZEN_1',
+            'site_id': 'SITE_CHAIN',
+            'latitude': 22.0,
+            'longitude': 72.0,
+        }
+    ])
+
+    first = resolver.resolve_detection(22.006, 72.0, 'LIVE_1')
+    assert first['status'] == 'MATCHED'
+    assert first['site_id'] == 'SITE_CHAIN'
+
+    # This point is >750 m from the original frozen member, but within 750 m
+    # of LIVE_1. DBSCAN-style member connectivity must therefore retain it.
+    second = resolver.resolve_detection(22.012, 72.0, 'LIVE_2')
+    assert second['status'] == 'MATCHED'
+    assert second['site_id'] == 'SITE_CHAIN'
+
+
+def test_loaded_candidate_members_use_radius_index():
+    resolver = SourceResolver(eps_m=750.0, min_samples=3)
+    resolver.load_candidates([
+        {
+            'candidate_id': f'CAND_{index}',
+            'latitude': 10.0 + index * 0.01,
+            'longitude': 70.0,
+            'detections': [{
+                'detection_id': f'DET_{index}',
+                'latitude': 10.0 + index * 0.01,
+                'longitude': 70.0,
+            }],
+        }
+        for index in range(600)
+    ])
+
+    assert resolver._candidate_tree_size == 600
+    candidate_id, distance = resolver._nearest_candidate(12.0001, 70.0)
+    assert candidate_id == 'CAND_200'
+    assert distance < 20.0
+
+
+def test_batched_members_preserve_dbscan_style_connectivity():
+    resolver = SourceResolver(eps_m=750.0, min_samples=3)
+    resolver.load_members([{
+        'detection_id': 'FROZEN_1',
+        'site_id': 'SITE_CHAIN',
+        'latitude': 22.0,
+        'longitude': 72.0,
+    }])
+    resolver.begin_batch()
+
+    first = resolver.resolve_detection(22.006, 72.0, 'LIVE_BATCH_1')
+    second = resolver.resolve_detection(22.012, 72.0, 'LIVE_BATCH_2')
+
+    assert first['site_id'] == 'SITE_CHAIN'
+    assert second['status'] == 'MATCHED'
+    assert second['site_id'] == 'SITE_CHAIN'
+    resolver.end_batch()
+    assert len(resolver.site_ids) == 3
+
+
+def test_batched_member_index_preserves_incremental_chain():
+    resolver = SourceResolver(eps_m=750.0, min_samples=3)
+    resolver.load_members([{
+        'detection_id': 'FROZEN_1',
+        'site_id': 'SITE_CHAIN',
+        'latitude': 22.0,
+        'longitude': 72.0,
+    }])
+    resolver.begin_batch()
+
+    first = resolver.resolve_detection(22.006, 72.0, 'LIVE_1')
+    second = resolver.resolve_detection(22.012, 72.0, 'LIVE_2')
+
+    assert first['site_id'] == 'SITE_CHAIN'
+    assert second['site_id'] == 'SITE_CHAIN'
+    resolver.end_batch()
+    third = resolver.resolve_detection(22.018, 72.0, 'LIVE_3')
+    assert third['site_id'] == 'SITE_CHAIN'
+

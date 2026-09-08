@@ -3,7 +3,8 @@ Site Daily Activity Timeline & Raw FIRMS Detections API Endpoints
 """
 
 import logging
-from typing import List
+from datetime import date
+from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
@@ -27,7 +28,11 @@ router = APIRouter()
     response_model=SiteTimelineResponse,
     summary="Daily FRP history and historical Model C anomaly scores"
 )
-def get_site_timeline(site_id: str, db: Session = Depends(get_db)):
+def get_site_timeline(
+    site_id: str,
+    as_of_date: Optional[date] = Query(None, description="Historical cutoff"),
+    db: Session = Depends(get_db),
+):
     """
     Returns full chronological daily activity sequence for a site,
     joined with historical Model C scores and anomaly drivers.
@@ -37,7 +42,7 @@ def get_site_timeline(site_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail=f"Source site '{site_id}' not found.")
 
     # Query daily activity joined with daily inferences
-    rows = (
+    query = (
         db.query(
             SiteDailyActivity.acq_date,
             SiteDailyActivity.detections,
@@ -55,9 +60,10 @@ def get_site_timeline(site_id: str, db: Session = Depends(get_db)):
             (SiteDailyActivity.acq_date == SiteDailyInference.acq_date)
         )
         .filter(SiteDailyActivity.site_id == site_id)
-        .order_by(SiteDailyActivity.acq_date.asc())
-        .all()
     )
+    if as_of_date is not None:
+        query = query.filter(SiteDailyActivity.acq_date <= as_of_date)
+    rows = query.order_by(SiteDailyActivity.acq_date.asc()).all()
 
     history: List[TimelinePoint] = []
     for r in rows:
@@ -95,6 +101,7 @@ def get_site_timeline(site_id: str, db: Session = Depends(get_db)):
 def get_site_detections(
     site_id: str,
     limit: int = Query(200, ge=1, le=1000, description="Max detection records to return"),
+    as_of_date: Optional[date] = Query(None, description="Historical cutoff"),
     db: Session = Depends(get_db)
 ):
     """
@@ -104,13 +111,15 @@ def get_site_detections(
     if not site:
         raise HTTPException(status_code=404, detail=f"Source site '{site_id}' not found.")
 
-    records = (
+    query = (
         db.query(FirmsDetection)
         .filter(FirmsDetection.source_site_id == site_id)
-        .order_by(FirmsDetection.acq_date.desc(), FirmsDetection.acq_time.desc())
-        .limit(limit)
-        .all()
     )
+    if as_of_date is not None:
+        query = query.filter(FirmsDetection.acq_date <= as_of_date)
+    records = query.order_by(
+        FirmsDetection.acq_date.desc(), FirmsDetection.acq_time.desc()
+    ).limit(limit).all()
 
     items: List[DetectionItem] = []
     for r in records:

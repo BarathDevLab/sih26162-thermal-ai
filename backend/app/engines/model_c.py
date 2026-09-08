@@ -1,10 +1,12 @@
 ﻿import os
 import math
+import json
 import joblib
 import numpy as np
 import pandas as pd
 from datetime import datetime, date
 from typing import List, Dict, Any, Optional, Union, Tuple
+from pathlib import Path
 
 MODEL_C_PATH_DEFAULT = "backend/models/MODEL_C_V3_FROZEN.joblib"
 
@@ -21,19 +23,59 @@ class ModelCEngine:
             raise FileNotFoundError(f"Model C calibration artifact not found at {model_path}")
 
         data = joblib.load(model_path)
+        required_keys = {"config", "group_reference", "final_reference"}
+        if not isinstance(data, dict) or not required_keys.issubset(data):
+            raise ValueError("Model C artifact is missing calibration/config payloads.")
         self.config = data["config"]
         self.group_reference = data["group_reference"]
-        self.final_reference = data["final_reference"]
+        required_groups = ("intensity_raw", "density_raw", "recurrence_raw", "change_raw")
+        if not isinstance(self.group_reference, dict):
+            raise ValueError("Model C group calibration payload must be a mapping.")
+        for group in required_groups:
+            if group not in self.group_reference:
+                raise ValueError(f"Model C artifact is missing '{group}' calibration.")
+            values = np.asarray(self.group_reference[group], dtype=float)
+            if values.ndim != 1 or values.size == 0 or not np.isfinite(values).all():
+                raise ValueError(f"Model C '{group}' calibration must be finite and non-empty.")
+            if np.any(values[1:] < values[:-1]):
+                raise ValueError(f"Model C '{group}' calibration must be sorted.")
+            self.group_reference[group] = values
+        self.final_reference = np.asarray(data["final_reference"], dtype=float)
+        if (
+            self.final_reference.ndim != 1
+            or self.final_reference.size == 0
+            or not np.isfinite(self.final_reference).all()
+            or np.any(self.final_reference[1:] < self.final_reference[:-1])
+        ):
+            raise ValueError("Model C final calibration must be finite, non-empty, and sorted.")
 
-        # Parameters
-        self.min_active_history = int(self.config.get("min_active_history", 5))
-        self.min_span_days = int(self.config.get("min_span_days", 30))
-        self.min_gap_history = int(self.config.get("min_gap_history", 3))
-        self.ewma_alpha = float(self.config.get("ewma_alpha", 0.35))
-        self.cusum_k = float(self.config.get("cusum_k", 2.0))
-        self.cusum_cap = float(self.config.get("cusum_cap", 50.0))
-        self.change_reset_gap = float(self.config.get("change_reset_gap", 30))
-        self.z_cap = float(self.config.get("z_cap", 20.0))
+        root = Path(__file__).resolve().parents[3]
+        with (root / "backend/config/frozen_thresholds.json").open("r", encoding="utf-8") as fh:
+            frozen = json.load(fh)["model_c"]
+        self.min_active_history = int(frozen["min_active_history"])
+        self.min_span_days = int(frozen["min_span_days"])
+        self.min_gap_history = int(frozen["min_gap_history"])
+        self.ewma_alpha = float(frozen["ewma_alpha"])
+        self.cusum_k = float(frozen["cusum_k"])
+        self.cusum_cap = float(frozen["cusum_cap"])
+        self.change_reset_gap = float(frozen["change_reset_gap_days"])
+        self.z_cap = float(frozen["z_cap"])
+        severity = frozen["severity"]
+        self.elevated_threshold = float(severity["elevated"]["gte"])
+        self.anomalous_threshold = float(severity["anomalous"]["gte"])
+        self.critical_threshold = float(severity["critical"]["gte"])
+        artifact_values = {
+            "min_active_history": self.min_active_history,
+            "min_span_days": self.min_span_days,
+            "min_gap_history": self.min_gap_history,
+            "ewma_alpha": self.ewma_alpha,
+            "cusum_k": self.cusum_k,
+            "cusum_cap": self.cusum_cap,
+            "z_cap": self.z_cap,
+        }
+        for key, expected in artifact_values.items():
+            if key in self.config and float(self.config[key]) != float(expected):
+                raise ValueError(f"Model C artifact parameter '{key}' disagrees with frozen config.")
 
     def _midrank_percentile(self, reference_array: np.ndarray, value: float) -> float:
         n = len(reference_array)
@@ -171,11 +213,11 @@ class ModelCEngine:
         c_score = self._midrank_percentile(self.final_reference, c_raw)
 
         # Map to severity status
-        if c_score >= 0.999:
+        if c_score >= self.critical_threshold:
             status = "CRITICAL"
-        elif c_score >= 0.990:
+        elif c_score >= self.anomalous_threshold:
             status = "ANOMALOUS"
-        elif c_score >= 0.950:
+        elif c_score >= self.elevated_threshold:
             status = "ELEVATED"
         else:
             status = "NORMAL"

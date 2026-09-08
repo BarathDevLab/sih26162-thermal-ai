@@ -108,7 +108,7 @@ async def alert_event_generator(
                         "updated_at": r.updated_at.isoformat() if r.updated_at else "",
                         "latitude": float(r.latitude) if r.latitude is not None else None,
                         "longitude": float(r.longitude) if r.longitude is not None else None,
-                        "a_class": r.a_class or "UNKNOWN"
+                        "a_class": r.a_class or "UNAVAILABLE"
                     }
                     yield f"event: alert\ndata: {json.dumps(alert_payload)}\n\n"
                     event_count += 1

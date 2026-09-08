@@ -15,10 +15,11 @@ Populates PostgreSQL (using fast COPY) or SQLite with:
 import os
 import sys
 import json
+import hashlib
 import time
 import logging
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import argparse
 import pandas as pd
 import numpy as np
@@ -31,16 +32,35 @@ if str(_repo_root) not in sys.path:
 from backend.app.db.session import engine, init_db, SessionLocal, DEFAULT_DATABASE_URL
 from backend.app.db.models import (
     SourceSite,
+    FirmsDetection,
     SiteDailyActivity,
     SiteModelA,
+    SiteModelAHistory,
+    SiteModelAFeatures,
+    SiteReferenceLabel,
     SiteModelB,
     SiteModelC,
     SiteDailyInference,
     FacilityEvidence,
+    EventEvidence,
+    CandidateSource,
+    CandidateSourceDetection,
+    SiteModelBHistory,
+    StackSnapshot,
+    ImageryCache,
+    IngestionRun,
+    FirmsBackfillWindow,
     ModelVersion,
     Alert
 )
 from backend.app.engines.decision_engine import DecisionEngine
+from backend.app.engines.model_a import ModelAEngine
+from backend.app.services.feature_builder import ORDERED_FEATURES, FEATURE_VERSION
+from backend.app.services.firms_ingestion import normalize_acq_time
+from backend.app.services.stack_readiness import (
+    REQUIRED_FILES, PROJECT_ROOT, _active_manifest_issue, _verify_declared_checksums,
+)
+from backend.app.services.feature_validation import validate_feature_builder_snapshot
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -71,12 +91,22 @@ def clean_database():
                         site_daily_inference,
                         site_model_c,
                         site_model_b,
+                        site_model_a_history,
+                        site_model_a_features,
                         site_model_a,
+                        site_model_b_history,
                         site_daily_activity,
+                        candidate_source_detections,
                         firms_detections,
                         candidate_sources,
                         source_sites,
+                        site_reference_labels,
+                        event_evidence,
                         facility_evidence,
+                        imagery_cache,
+                        ingestion_runs,
+                        stack_snapshots,
+                        firms_backfill_windows,
                         model_versions
                     CASCADE;
                 """)
@@ -86,8 +116,13 @@ def clean_database():
     else:
         db = SessionLocal()
         try:
-            for model in [Alert, SiteDailyInference, SiteModelC, SiteModelB, SiteModelA,
-                          SiteDailyActivity, FacilityEvidence, ModelVersion, SourceSite]:
+            for model in [Alert, SiteDailyInference, SiteModelC, SiteModelBHistory, SiteModelB,
+                          SiteModelAHistory, SiteModelAFeatures, SiteModelA,
+                          SiteReferenceLabel, SiteDailyActivity, FirmsDetection,
+                          CandidateSourceDetection, CandidateSource, EventEvidence,
+                          FacilityEvidence, ImageryCache, IngestionRun, StackSnapshot,
+                          FirmsBackfillWindow,
+                          ModelVersion, SourceSite]:
                 db.query(model).delete()
             db.commit()
         finally:
@@ -172,82 +207,213 @@ def bootstrap_source_sites(csv_path: str, limit: int = None):
     return total
 
 
-def bootstrap_model_a(csv_path: str, limit: int = None):
-    """Loads baseline Model A identity for all source sites."""
-    t0 = time.time()
-    logger.info(f"Bootstrapping Model A predictions from {csv_path}...")
-    if not os.path.exists(csv_path):
-        return 0
+def hydrate_source_static_features(feature_path: str, limit: int = None):
+    """Attach the frozen WorldCover/spatial feature groups to source sites."""
+    if not os.path.exists(feature_path):
+        raise FileNotFoundError(f"Authoritative Model A feature snapshot is required: {feature_path}")
+    df = pd.read_parquet(feature_path)
+    required = ["site_id", *ORDERED_FEATURES[-12:]]
+    missing = [column for column in required if column not in df.columns]
+    if missing:
+        raise ValueError(f"Static feature snapshot is missing columns: {missing}")
+    if limit:
+        df = df.iloc[:limit]
+    db = SessionLocal()
+    try:
+        for idx, row in df.iterrows():
+            site = db.query(SourceSite).filter_by(site_id=str(row["site_id"])).one_or_none()
+            if site is None:
+                raise ValueError(f"Feature snapshot references unknown site {row['site_id']}")
+            site.spatial_stats = {
+                name: float(row[name]) for name in ORDERED_FEATURES[-12:-9] if pd.notna(row[name])
+            }
+            site.land_cover = {
+                name: float(row[name]) for name in ORDERED_FEATURES[-9:] if pd.notna(row[name])
+            }
+            site.feature_version = FEATURE_VERSION
+            if idx and idx % 2000 == 0:
+                db.commit()
+        db.commit()
+    finally:
+        db.close()
+    return len(df)
 
-    df = pd.read_csv(csv_path, usecols=["site_id", "label_final"], low_memory=False)
+
+def bootstrap_assigned_detections(parquet_path: str, limit: int = None):
+    """Load the authoritative frozen detection-to-site membership snapshot."""
+    if not os.path.exists(parquet_path):
+        raise FileNotFoundError(f"Assigned FIRMS detection snapshot is required: {parquet_path}")
+    df = pd.read_parquet(parquet_path)
+    required = [
+        "detection_id", "site_id", "latitude", "longitude", "acq_date",
+        "acq_time", "frp", "satellite", "source_sensor", "daynight", "version",
+    ]
+    missing = [column for column in required if column not in df.columns]
+    if missing:
+        raise ValueError(f"Assigned detection snapshot is missing columns: {missing}")
     if limit:
         df = df.iloc[:limit]
 
-    total = len(df)
-    now_iso = datetime.now(timezone.utc).isoformat()
+    mappings = []
+    for _, row in df.iterrows():
+        mappings.append({
+            "detection_id": str(row["detection_id"]),
+            "source_sensor": _optional_string(row.get("source_sensor")) or "VIIRS_NOAA20_NRT",
+            "satellite": str(row["satellite"]),
+            "instrument": _optional_string(row.get("instrument")) or "VIIRS",
+            "latitude": float(row["latitude"]),
+            "longitude": float(row["longitude"]),
+            "acq_date": pd.to_datetime(row["acq_date"]).date(),
+            "acq_time": normalize_acq_time(row["acq_time"]),
+            "frp": float(row["frp"]),
+            "bright_ti4": _optional_float(row.get("bright_ti4", row.get("brightness"))),
+            "bright_ti5": _optional_float(row.get("bright_ti5", row.get("bright_t31"))),
+            "scan": _optional_float(row.get("scan")),
+            "track": _optional_float(row.get("track")),
+            "confidence": _optional_string(row.get("confidence")),
+            "daynight": str(row["daynight"]),
+            "version": _optional_string(row.get("version")),
+            "source_site_id": str(row["site_id"]),
+            "resolution_status": "FROZEN_MEMBER",
+            "is_ambiguous": bool(row.get("is_ambiguous", False)),
+            "candidate_site_ids": None,
+            "assignment_distance_m": _optional_float(row.get("assignment_distance_m")),
+            "raw_payload": {"bootstrap_source": Path(parquet_path).name},
+            "ingested_at": datetime.now(timezone.utc),
+        })
 
-    if IS_POSTGRES:
-        conn = get_raw_psycopg_conn()
-        try:
-            with conn.cursor() as cur:
-                with cur.copy(
-                    "COPY site_model_a (site_id, core_probability, class_name, decision, prithvi_status, model_version, computed_at) FROM STDIN"
-                ) as copy:
-                    for idx in range(total):
-                        sid = df["site_id"].iat[idx]
-                        lbl = str(df["label_final"].iat[idx]).upper()
-                        if lbl == "INDUSTRIAL":
-                            prob = 0.985
-                            cls_name = "INDUSTRIAL"
-                            dec = "INDUSTRIAL_CORE_STRONG"
-                        elif lbl == "NONINDUSTRIAL":
-                            prob = 0.120
-                            cls_name = "NONINDUSTRIAL"
-                            dec = "NONINDUSTRIAL"
-                        elif lbl == "CONFLICT_REVIEW":
-                            prob = 0.550
-                            cls_name = "UNKNOWN"
-                            dec = "UNKNOWN"
-                        else:
-                            prob = 0.450
-                            cls_name = "UNKNOWN"
-                            dec = "UNKNOWN"
+    db = SessionLocal()
+    try:
+        for start in range(0, len(mappings), 5000):
+            db.bulk_insert_mappings(FirmsDetection, mappings[start:start + 5000])
+            db.commit()
+        latest = df.assign(acq_date=pd.to_datetime(df["acq_date"])).groupby("site_id")["acq_date"].max()
+        for site_id, latest_seen in latest.items():
+            site = db.query(SourceSite).filter_by(site_id=str(site_id)).one_or_none()
+            if site is None:
+                raise ValueError(f"Assigned detection snapshot references unknown site {site_id}")
+            site.latest_seen = latest_seen.date()
+        db.commit()
+    finally:
+        db.close()
+    return len(mappings)
 
-                        copy.write_row((sid, prob, cls_name, dec, "NOT_TRIGGERED", "2026-09-04-r1", now_iso))
-            conn.commit()
-        finally:
-            conn.close()
-    else:
-        db = SessionLocal()
-        try:
-            records = []
-            for idx in range(total):
-                sid = df["site_id"].iat[idx]
-                lbl = str(df["label_final"].iat[idx]).upper()
-                if lbl == "INDUSTRIAL":
-                    prob, cls_name, dec = 0.985, "INDUSTRIAL", "INDUSTRIAL_CORE_STRONG"
-                elif lbl == "NONINDUSTRIAL":
-                    prob, cls_name, dec = 0.120, "NONINDUSTRIAL", "NONINDUSTRIAL"
-                else:
-                    prob, cls_name, dec = 0.450, "UNKNOWN", "UNKNOWN"
 
-                records.append({
-                    "site_id": sid, "core_probability": prob, "class_name": cls_name,
-                    "decision": dec, "prithvi_status": "NOT_TRIGGERED",
-                    "model_version": "2026-09-04-r1", "computed_at": datetime.now(timezone.utc)
-                })
-                if len(records) >= 5000:
-                    db.bulk_insert_mappings(SiteModelA, records)
-                    db.commit()
-                    records = []
-            if records:
-                db.bulk_insert_mappings(SiteModelA, records)
+def _optional_float(value):
+    return None if value is None or pd.isna(value) else float(value)
+
+
+def _optional_string(value):
+    return None if value is None or pd.isna(value) else str(value)
+
+
+def bootstrap_model_a(feature_path: str, limit: int = None):
+    """Run real A-Core inference from the frozen exact feature snapshot."""
+    t0 = time.time()
+    if not os.path.exists(feature_path):
+        raise FileNotFoundError(
+            f"Authoritative Model A feature snapshot is required: {feature_path}"
+        )
+    df = pd.read_parquet(feature_path)
+    required = ["site_id", *ORDERED_FEATURES]
+    missing = [column for column in required if column not in df.columns]
+    if missing:
+        raise ValueError(f"Model A feature snapshot is missing columns: {missing}")
+    if limit:
+        df = df.iloc[:limit]
+
+    engine_a = ModelAEngine()
+    feature_frame = df[ORDERED_FEATURES]
+    if list(feature_frame.columns) != engine_a.feature_names:
+        raise ValueError("Feature snapshot order disagrees with the Model A artifact.")
+    cutoff_column = "feature_as_of_detection_date"
+    if cutoff_column not in df.columns:
+        raise ValueError("Feature snapshot must include feature_as_of_detection_date.")
+
+    db = SessionLocal()
+    try:
+        now = datetime.now(timezone.utc)
+        for idx in range(len(df)):
+            site_id = str(df["site_id"].iat[idx])
+            cutoff = pd.to_datetime(df[cutoff_column].iat[idx]).date()
+            result = engine_a.predict(feature_frame.iloc[[idx]])
+            feature_values = {
+                name: (None if pd.isna(feature_frame[name].iat[idx]) else float(feature_frame[name].iat[idx]))
+                for name in ORDERED_FEATURES
+            }
+            db.add(SiteModelA(
+                site_id=site_id,
+                core_probability=float(result["core_probability"]),
+                class_name=result["class"],
+                decision=result["decision"],
+                prithvi_status="NOT_TRIGGERED",
+                model_version="2026-09-04-r1",
+                feature_version=FEATURE_VERSION,
+                feature_as_of_detection_date=cutoff,
+                computed_at=now,
+            ))
+            db.add(SiteModelAFeatures(
+                site_id=site_id,
+                feature_as_of_detection_date=cutoff,
+                feature_version=FEATURE_VERSION,
+                ordered_features=feature_values,
+                computed_at=now,
+            ))
+            db.add(SiteModelAHistory(
+                inference_id=f"BOOTSTRAP_A_{site_id}",
+                site_id=site_id,
+                feature_as_of_detection_date=cutoff,
+                core_probability=float(result["core_probability"]),
+                class_name=result["class"],
+                decision=result["decision"],
+                prithvi_status="NOT_TRIGGERED",
+                model_version="2026-09-04-r1",
+                feature_version=FEATURE_VERSION,
+                computed_at=now,
+            ))
+            if idx and idx % 2000 == 0:
                 db.commit()
-        finally:
-            db.close()
+        db.commit()
+    finally:
+        db.close()
+    logger.info("Inserted %d genuine Model A states in %.2fs.", len(df), time.time() - t0)
+    return len(df)
 
-    logger.info(f"Inserted {total} Model A states in {time.time()-t0:.2f}s.")
-    return total
+
+def bootstrap_reference_labels(csv_path: str, limit: int = None):
+    """Load frozen research truth without creating runtime probabilities."""
+    df = pd.read_csv(csv_path, low_memory=False)
+    if limit:
+        df = df.iloc[:limit]
+    db = SessionLocal()
+    try:
+        records = []
+        for _, row in df.iterrows():
+            records.append({
+                "site_id": str(row["site_id"]),
+                "reference_class": _optional_string(row.get("label_final")) or "UNKNOWN",
+                "label_tier": _optional_string(row.get("label_tier")),
+                "industrial_source": _optional_string(row.get("industrial_source")),
+                "nonindustrial_source": _optional_string(row.get("nonindustrial_source")),
+                "evidence_metadata": {
+                    "industrial_affirmative": _clean_bool(row.get("industrial_affirmative", False)),
+                    "nonindustrial_affirmative": _clean_bool(row.get("nonindustrial_affirmative", False)),
+                },
+                "frozen_reference_version": "2025-final",
+            })
+        db.bulk_insert_mappings(SiteReferenceLabel, records)
+        db.commit()
+    finally:
+        db.close()
+    return len(df)
+
+
+def _clean_bool(value) -> bool:
+    if value is None or pd.isna(value):
+        return False
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y"}
+    return bool(value)
 
 
 def bootstrap_model_b_states(csv_path: str, limit: int = None):
@@ -281,12 +447,7 @@ def bootstrap_model_b_states(csv_path: str, limit: int = None):
                         reason = df[reason_col].iat[idx] if reason_col and pd.notna(df[reason_col].iat[idx]) else ""
                         dsl = int(df["days_since_last"].iat[idx]) if pd.notna(df["days_since_last"].iat[idx]) else None
 
-                        windows = {
-                            "active_days_30": int(df["active_days_30"].iat[idx]) if pd.notna(df.get("active_days_30", pd.Series([0])).iat[idx]) else 0,
-                            "active_days_90": int(df["active_days_90"].iat[idx]) if pd.notna(df.get("active_days_90", pd.Series([0])).iat[idx]) else 0,
-                            "active_days_180": int(df["active_days_180"].iat[idx]) if pd.notna(df.get("active_days_180", pd.Series([0])).iat[idx]) else 0,
-                            "active_days_365": int(df["active_days_365"].iat[idx]) if pd.notna(df.get("active_days_365", pd.Series([0])).iat[idx]) else 0,
-                        }
+                        windows = _model_b_windows(df, idx)
 
                         copy.write_row((sid, state, conf, reason, dsl, json.dumps(windows), "2026-09-04-r1", now_iso))
             conn.commit()
@@ -302,12 +463,7 @@ def bootstrap_model_b_states(csv_path: str, limit: int = None):
                 conf = df[conf_col].iat[idx] if conf_col and pd.notna(df[conf_col].iat[idx]) else "HIGH"
                 reason = df[reason_col].iat[idx] if reason_col and pd.notna(df[reason_col].iat[idx]) else ""
                 dsl = int(df["days_since_last"].iat[idx]) if pd.notna(df["days_since_last"].iat[idx]) else None
-                windows = {
-                    "active_days_30": int(df["active_days_30"].iat[idx]) if pd.notna(df.get("active_days_30", pd.Series([0])).iat[idx]) else 0,
-                    "active_days_90": int(df["active_days_90"].iat[idx]) if pd.notna(df.get("active_days_90", pd.Series([0])).iat[idx]) else 0,
-                    "active_days_180": int(df["active_days_180"].iat[idx]) if pd.notna(df.get("active_days_180", pd.Series([0])).iat[idx]) else 0,
-                    "active_days_365": int(df["active_days_365"].iat[idx]) if pd.notna(df.get("active_days_365", pd.Series([0])).iat[idx]) else 0,
-                }
+                windows = _model_b_windows(df, idx)
                 records.append({
                     "site_id": sid, "state": state, "confidence": conf, "reason": reason,
                     "days_since_last": dsl, "active_days_windows": windows,
@@ -323,8 +479,43 @@ def bootstrap_model_b_states(csv_path: str, limit: int = None):
         finally:
             db.close()
 
-    logger.info(f"Inserted {total} Model B states in {time.time()-t0:.2f}s.")
+    history_db = SessionLocal()
+    try:
+        history_rows = []
+        cutoff = date(2025, 12, 31)
+        for idx in range(total):
+            history_rows.append({
+                "site_id": str(df["site_id"].iat[idx]),
+                "as_of_date": cutoff,
+                "state": str(df["model_b_state"].iat[idx]),
+                "confidence": str(df[conf_col].iat[idx]) if conf_col and pd.notna(df[conf_col].iat[idx]) else "HIGH",
+                "reason": str(df[reason_col].iat[idx]) if reason_col and pd.notna(df[reason_col].iat[idx]) else "",
+                "days_since_last": int(df["days_since_last"].iat[idx]) if pd.notna(df["days_since_last"].iat[idx]) else None,
+                "active_days_windows": _model_b_windows(df, idx),
+                "model_version": "2026-09-04-r1",
+                "computed_at": datetime.now(timezone.utc),
+            })
+            if len(history_rows) >= 5000:
+                history_db.bulk_insert_mappings(SiteModelBHistory, history_rows)
+                history_db.commit()
+                history_rows = []
+        if history_rows:
+            history_db.bulk_insert_mappings(SiteModelBHistory, history_rows)
+            history_db.commit()
+    finally:
+        history_db.close()
+
+    logger.info(f"Inserted {total} Model B states and cutoff history rows in {time.time()-t0:.2f}s.")
     return total
+
+
+def _model_b_windows(frame: pd.DataFrame, idx: int) -> dict:
+    result = {}
+    for window in (30, 90, 180, 365):
+        column = f"active_days_{window}"
+        value = frame[column].iat[idx] if column in frame.columns else 0
+        result[str(window)] = int(value) if pd.notna(value) else 0
+    return result
 
 
 def bootstrap_daily_activity(parquet_path: str, limit: int = None):
@@ -412,7 +603,7 @@ def bootstrap_model_c_and_inferences(parquet_path: str, limit: int = None):
         try:
             with conn.cursor() as cur:
                 with cur.copy(
-                    "COPY site_daily_inference (site_id, acq_date, model_c_status, c_score, c_raw, group_scores, evidence_99, drivers, model_c_version, computed_at) FROM STDIN"
+                    "COPY site_daily_inference (site_id, acq_date, model_c_status, c_score, c_raw, group_scores, evidence_99, drivers, raw_signals, model_c_version, computed_at) FROM STDIN"
                 ) as copy:
                     for idx in range(total_inferences):
                         sid = df["site_id"].iat[idx]
@@ -429,10 +620,11 @@ def bootstrap_model_c_and_inferences(parquet_path: str, limit: int = None):
                             "change": float(df["change_raw_pct"].iat[idx]) if pd.notna(df["change_raw_pct"].iat[idx]) else None,
                         }
                         drivers = [d.strip() for d in str(df["anomaly_drivers"].iat[idx]).split(",") if d.strip()] if pd.notna(df["anomaly_drivers"].iat[idx]) else []
+                        raw = _model_c_raw_signals(df, idx)
 
                         copy.write_row((
                             sid, dt, status, c_score, c_raw,
-                            json.dumps(grp), ev99, json.dumps(drivers),
+                            json.dumps(grp), ev99, json.dumps(drivers), json.dumps(raw),
                             "2026-09-04-r1", now_iso
                         ))
             conn.commit()
@@ -449,9 +641,10 @@ def bootstrap_model_c_and_inferences(parquet_path: str, limit: int = None):
                     "model_c_status": str(df["model_c_level"].iat[idx]),
                     "c_score": float(df["c_score"].iat[idx]) if pd.notna(df["c_score"].iat[idx]) else None,
                     "c_raw": float(df["c_raw"].iat[idx]) if pd.notna(df["c_raw"].iat[idx]) else None,
-                    "group_scores": None,
+                    "group_scores": _model_c_group_scores(df, idx),
                     "evidence_99": int(df["evidence_99"].iat[idx]) if pd.notna(df["evidence_99"].iat[idx]) else 0,
-                    "drivers": None,
+                    "drivers": _model_c_drivers(df, idx),
+                    "raw_signals": _model_c_raw_signals(df, idx),
                     "model_c_version": "2026-09-04-r1",
                     "computed_at": datetime.now(timezone.utc)
                 })
@@ -520,10 +713,13 @@ def bootstrap_model_c_and_inferences(parquet_path: str, limit: int = None):
                     "operational_status": str(df_latest["model_c_level"].iat[idx]),
                     "c_score": float(df_latest["c_score"].iat[idx]) if pd.notna(df_latest["c_score"].iat[idx]) else None,
                     "c_raw": float(df_latest["c_raw"].iat[idx]) if pd.notna(df_latest["c_raw"].iat[idx]) else None,
-                    "group_scores": None,
+                    "group_scores": _model_c_group_scores(df_latest, idx),
                     "evidence_99": int(df_latest["evidence_99"].iat[idx]) if pd.notna(df_latest["evidence_99"].iat[idx]) else 0,
-                    "drivers": None,
-                    "history_counts": None,
+                    "drivers": _model_c_drivers(df_latest, idx),
+                    "history_counts": {
+                        "history_active_days": int(df_latest["history_active_days"].iat[idx]) if pd.notna(df_latest["history_active_days"].iat[idx]) else 0,
+                        "history_span_days": int(df_latest["history_span_days"].iat[idx]) if pd.notna(df_latest["history_span_days"].iat[idx]) else 0,
+                    },
                     "model_version": "2026-09-04-r1",
                     "computed_at": datetime.now(timezone.utc)
                 })
@@ -539,6 +735,31 @@ def bootstrap_model_c_and_inferences(parquet_path: str, limit: int = None):
 
     logger.info(f"Materialized {total_latest} site_model_c records in {time.time()-t1:.2f}s.")
     return total_inferences, total_latest
+
+
+def _model_c_group_scores(frame: pd.DataFrame, idx: int) -> dict:
+    return {
+        "intensity": _optional_float(frame["intensity_raw_pct"].iat[idx]),
+        "density": _optional_float(frame["density_raw_pct"].iat[idx]),
+        "recurrence_burst": _optional_float(frame["recurrence_raw_pct"].iat[idx]),
+        "change": _optional_float(frame["change_raw_pct"].iat[idx]),
+    }
+
+
+def _model_c_raw_signals(frame: pd.DataFrame, idx: int) -> dict:
+    return {
+        "intensity_raw": _optional_float(frame["intensity_raw"].iat[idx]),
+        "density_raw": _optional_float(frame["density_raw"].iat[idx]),
+        "recurrence_raw": _optional_float(frame["recurrence_raw"].iat[idx]),
+        "change_raw": _optional_float(frame["change_raw"].iat[idx]),
+        "ewma_score": _optional_float(frame["ewma_score"].iat[idx]),
+        "cusum_score": _optional_float(frame["cusum_score"].iat[idx]),
+    }
+
+
+def _model_c_drivers(frame: pd.DataFrame, idx: int) -> list:
+    value = frame["anomaly_drivers"].iat[idx]
+    return [item.strip() for item in str(value).split(",") if item.strip()] if pd.notna(value) else []
 
 
 def clean_dict_for_json(d: dict) -> dict:
@@ -557,7 +778,7 @@ def clean_dict_for_json(d: dict) -> dict:
 
 
 def bootstrap_facility_evidence(evidence_dir: str = "data/evidence"):
-    """Loads GEM power plants, World Bank flaring, and ICAR crop burn data."""
+    """Load persistent facility evidence only (GEM and World Bank GFMR)."""
     logger.info(f"Bootstrapping external evidence datasets from {evidence_dir}...")
     records = []
 
@@ -569,12 +790,12 @@ def bootstrap_facility_evidence(evidence_dir: str = "data/evidence"):
             records.append({
                 "evidence_id": f"GFMR_{idx:05d}",
                 "source_name": "WORLDBANK_GFMR",
-                "facility_name": str(row.get("facility_name", f"Flare_{idx}")),
-                "facility_type": str(row.get("subclass", "gas_flare")),
+                "facility_name": _optional_string(row.get("facility_name")) or f"Flare_{idx}",
+                "facility_type": _optional_string(row.get("subclass")) or "gas_flare",
                 "latitude": float(row["latitude"]),
                 "longitude": float(row["longitude"]),
-                "coordinate_quality": str(row.get("coordinate_quality", "HIGH")),
-                "source_url": str(row.get("source_url", "")),
+                "coordinate_quality": _optional_string(row.get("coordinate_quality")) or "HIGH",
+                "source_url": _optional_string(row.get("source_url")),
                 "attributes": clean_dict_for_json(row.to_dict())
             })
         logger.info(f"Loaded {len(df_wb)} World Bank GFMR flaring records.")
@@ -587,33 +808,15 @@ def bootstrap_facility_evidence(evidence_dir: str = "data/evidence"):
             records.append({
                 "evidence_id": f"GEM_{idx:05d}",
                 "source_name": "GEM_GIPT",
-                "facility_name": str(row.get("facility_name", f"PowerPlant_{idx}")),
-                "facility_type": str(row.get("subclass", "power_plant")),
+                "facility_name": _optional_string(row.get("facility_name")) or f"PowerPlant_{idx}",
+                "facility_type": _optional_string(row.get("subclass")) or "power_plant",
                 "latitude": float(row["latitude"]),
                 "longitude": float(row["longitude"]),
-                "coordinate_quality": str(row.get("coordinate_quality", "EXACT")),
-                "source_url": str(row.get("source_url", "")),
+                "coordinate_quality": _optional_string(row.get("coordinate_quality")) or "EXACT",
+                "source_url": _optional_string(row.get("source_url")),
                 "attributes": clean_dict_for_json(row.to_dict())
             })
         logger.info(f"Loaded {len(df_gem)} GEM GIPT power plant records.")
-
-    # 3. ICAR Crop Burn
-    icar_file = os.path.join(evidence_dir, "icar_creams_crop_burn_2025.csv")
-    if os.path.exists(icar_file):
-        df_icar = pd.read_csv(icar_file, low_memory=False)
-        for idx, row in df_icar.iterrows():
-            records.append({
-                "evidence_id": f"ICAR_{idx:06d}",
-                "source_name": "ICAR_CROP",
-                "facility_name": str(row.get("event_name", row.get("facility_name", f"Crop_Burn_{idx}"))),
-                "facility_type": str(row.get("subclass", "crop_residue_burn")),
-                "latitude": float(row["latitude"]),
-                "longitude": float(row["longitude"]),
-                "coordinate_quality": str(row.get("coordinate_quality", "SATELLITE")),
-                "source_url": str(row.get("source_url", "")),
-                "attributes": clean_dict_for_json(row.to_dict())
-            })
-        logger.info(f"Loaded {len(df_icar)} ICAR CREAMS crop burn records.")
 
     if records:
         db = SessionLocal()
@@ -630,18 +833,85 @@ def bootstrap_facility_evidence(evidence_dir: str = "data/evidence"):
     return len(records)
 
 
+def bootstrap_event_evidence(evidence_dir: str = "data/evidence"):
+    """Load date-bound ICAR and FSI observations without treating them as facilities."""
+    specs = (
+        ("icar_creams_crop_burn_2025.csv", "ICAR_IARI_CREAMS", "crop_residue_burn", "ICAR"),
+        ("fsi_forest_fire_2025.csv", "FSI_FOREST_FIRE", "forest_fire", "FSI"),
+    )
+    records = []
+    retrieved_at = datetime.now(timezone.utc)
+    for filename, source_name, default_type, prefix in specs:
+        path = os.path.join(evidence_dir, filename)
+        if not os.path.exists(path):
+            continue
+        frame = pd.read_csv(path, low_memory=False)
+        for idx, row in frame.iterrows():
+            event_date = pd.to_datetime(row.get("event_date"), errors="coerce")
+            event_end = pd.to_datetime(row.get("event_end_date"), errors="coerce")
+            acq_time = _optional_string(row.get("acq_time")) or "00:00:00"
+            observed_at = None
+            if pd.notna(event_date):
+                parsed_time = pd.to_datetime(acq_time, errors="coerce")
+                observed_at = event_date.to_pydatetime().replace(tzinfo=timezone.utc)
+                if pd.notna(parsed_time):
+                    observed_at = observed_at.replace(
+                        hour=parsed_time.hour, minute=parsed_time.minute, second=parsed_time.second
+                    )
+            records.append({
+                "evidence_id": f"{prefix}_{idx:06d}",
+                "source_name": source_name,
+                "evidence_type": _optional_string(row.get("subclass")) or default_type,
+                "reference_id": _optional_string(row.get("reference_id")),
+                "latitude": float(row["latitude"]),
+                "longitude": float(row["longitude"]),
+                "event_start": event_date.to_pydatetime().replace(tzinfo=timezone.utc) if pd.notna(event_date) else None,
+                "event_end": event_end.to_pydatetime().replace(tzinfo=timezone.utc) if pd.notna(event_end) else None,
+                "observed_at": observed_at,
+                "retrieved_at": retrieved_at,
+                "source_version": "2025-frozen",
+                "coordinate_quality": "SATELLITE_DERIVED",
+                "temporal_quality": "EVENT_DATE",
+                "authority_level": "OFFICIAL_EXTERNAL_REFERENCE",
+                "source_url": _optional_string(row.get("source_url")),
+                "attributes": clean_dict_for_json(row.to_dict()),
+            })
+        logger.info("Loaded %d time-bound records from %s.", len(frame), filename)
+    db = SessionLocal()
+    try:
+        for start in range(0, len(records), 5000):
+            db.bulk_insert_mappings(EventEvidence, records[start:start + 5000])
+            db.commit()
+    finally:
+        db.close()
+    return len(records)
+
+
 def bootstrap_model_versions():
-    """Registers the current active frozen model stack in model_versions table."""
+    """Register the active stack with real content hashes."""
     logger.info("Registering model versions...")
-    versions = [
-        {"component": "A_CORE", "version": "2026-09-04-r1", "artifact_sha256": "verified", "is_active": True},
-        {"component": "MODEL_B", "version": "2026-09-04-r1", "artifact_sha256": "deterministic_rules", "is_active": True},
-        {"component": "MODEL_C", "version": "2026-09-04-r1", "artifact_sha256": "v3_calibration", "is_active": True},
-        {"component": "DECISION_ENGINE", "version": "2026-09-04-r1", "artifact_sha256": "frozen_matrix", "is_active": True},
-    ]
+    artifacts = {
+        "A_CORE": "backend/models/MODEL_A_FINAL.joblib",
+        "MODEL_B": "backend/config/model_b.json",
+        "MODEL_C": "backend/models/MODEL_C_V3_FROZEN.joblib",
+        "DECISION_ENGINE": "backend/config/decision_engine.json",
+    }
+    versions = []
+    for component, path_string in artifacts.items():
+        path = _repo_root / path_string
+        if not path.is_file():
+            raise FileNotFoundError(f"Required active-stack artifact is missing: {path_string}")
+        versions.append({
+            "component": component,
+            "version": "2026-09-04-r1",
+            "artifact_sha256": _sha256_file(path),
+            "config": {"repo_path": path_string},
+            "is_active": True,
+        })
 
     db = SessionLocal()
     try:
+        db.query(ModelVersion).update({ModelVersion.is_active: False})
         for v in versions:
             v["activated_at"] = datetime.now(timezone.utc)
             db.merge(ModelVersion(**v))
@@ -649,6 +919,54 @@ def bootstrap_model_versions():
         logger.info("Registered 4 active model stack components.")
     finally:
         db.close()
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def verify_packaging_gate() -> None:
+    """Fail before schema/data mutation when the authoritative package is incomplete."""
+    missing = [relative for relative in REQUIRED_FILES if not (PROJECT_ROOT / relative).is_file()]
+    mismatches = _verify_declared_checksums()
+    manifest_issue = None if missing else _active_manifest_issue()
+    if missing or mismatches or manifest_issue:
+        parts = []
+        if missing:
+            parts.append("missing: " + ", ".join(missing))
+        if mismatches:
+            parts.append("checksum mismatch: " + ", ".join(mismatches))
+        if manifest_issue:
+            parts.append(manifest_issue)
+        raise RuntimeError("P0 packaging gate failed (" + "; ".join(parts) + ")")
+
+
+def bootstrap_historical_stack_snapshot() -> str:
+    """Record the common frozen 2025 cutoff without declaring it live-current."""
+    snapshot_id = hashlib.sha256(b"2026-09-04-r1:2025-12-31:VIIRS_NOAA20_NRT").hexdigest()
+    db = SessionLocal()
+    try:
+        row = db.query(StackSnapshot).filter_by(snapshot_id=snapshot_id).one_or_none()
+        if row is None:
+            row = StackSnapshot(snapshot_id=snapshot_id)
+            db.add(row)
+        row.model_stack_version = "2026-09-04-r1"
+        row.data_through_date = date(2025, 12, 31)
+        row.primary_firms_source = "VIIRS_NOAA20_NRT"
+        row.a_core_artifact_sha256 = _sha256_file(_repo_root / "backend/models/MODEL_A_FINAL.joblib")
+        row.c_artifact_sha256 = _sha256_file(_repo_root / "backend/models/MODEL_C_V3_FROZEN.joblib")
+        row.feature_version = FEATURE_VERSION
+        row.resolver_version = "incremental-member-radius-750m-min3-v1"
+        row.backfill_completed_at = None
+        row.status = "HISTORICAL"
+        db.commit()
+    finally:
+        db.close()
+    return snapshot_id
 
 
 def bootstrap_alerts():
@@ -740,6 +1058,10 @@ def main():
     parser.add_argument("--init-only", action="store_true", help="Only create database schema without loading data")
     args = parser.parse_args()
 
+    if not args.init_only and not args.evidence_only:
+        verify_packaging_gate()
+        validate_feature_builder_snapshot()
+
     print("=== SIH26162 Full Database Bootstrap ===")
     logger.info("Initializing database schema...")
     init_db()
@@ -754,10 +1076,15 @@ def main():
     t_start = time.time()
 
     if args.evidence_only:
-        n_sites, n_a, n_b, n_daily, n_inf, n_c = 0, 0, 0, 0, 0, 0
+        n_sites, n_detections, n_a, n_b, n_daily, n_inf, n_c = 0, 0, 0, 0, 0, 0, 0
     else:
         n_sites = bootstrap_source_sites("data/bootstrap/source_sites_ground_truth_FINAL.csv", limit=args.limit)
-        n_a = bootstrap_model_a("data/bootstrap/source_sites_ground_truth_FINAL.csv", limit=args.limit)
+        hydrate_source_static_features("data/bootstrap/source_site_features_2025.parquet", limit=args.limit)
+        n_detections = bootstrap_assigned_detections(
+            "data/bootstrap/firms_detections_2025_assigned.parquet", limit=args.limit
+        )
+        n_a = bootstrap_model_a("data/bootstrap/source_site_features_2025.parquet", limit=args.limit)
+        bootstrap_reference_labels("data/bootstrap/source_sites_ground_truth_FINAL.csv", limit=args.limit)
         n_b = bootstrap_model_b_states("data/bootstrap/MODEL_B_SOURCE_STATES_FINAL.csv", limit=args.limit)
 
         n_daily = 0
@@ -769,21 +1096,28 @@ def main():
             n_inf, n_c = bootstrap_model_c_and_inferences("data/bootstrap/MODEL_C_EVENT_REPLAY_V3.parquet", limit=args.limit)
 
     n_ev = bootstrap_facility_evidence()
+    n_event_ev = bootstrap_event_evidence()
     bootstrap_model_versions()
     n_alt = bootstrap_alerts()
+    historical_snapshot_id = None
+    if not args.evidence_only:
+        historical_snapshot_id = bootstrap_historical_stack_snapshot()
 
     elapsed = time.time() - t_start
     print("\n" + "=" * 50)
     print("=== SIH26162 Database Bootstrap Complete ===")
     print(f"  Total Duration:         {elapsed:.1f} seconds")
     print(f"  Source Sites:           {n_sites:,}")
+    print(f"  Assigned Detections:    {n_detections:,}")
     print(f"  Model A Baseline:       {n_a:,}")
     print(f"  Model B States:         {n_b:,}")
     print(f"  Site Daily Activity:    {n_daily:,}")
     print(f"  Site Daily Inferences:  {n_inf:,}")
     print(f"  Model C Materialized:   {n_c:,}")
     print(f"  Facility Evidence:      {n_ev:,}")
+    print(f"  Event Evidence:         {n_event_ev:,}")
     print(f"  Operational Alerts:     {n_alt:,}")
+    print(f"  Historical Snapshot:    {historical_snapshot_id or 'not created'}")
     print("=" * 50)
 
 

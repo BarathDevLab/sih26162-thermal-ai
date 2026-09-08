@@ -24,6 +24,28 @@ class SiteEvidenceResponse(BaseModel):
     search_radius_m: float = Field(..., description="Radial distance searched around site in meters")
     total_evidence_count: int = Field(..., description="Number of evidence facilities found")
     evidence: List[FacilityEvidenceSummary] = Field(default_factory=list, description="Co-located facility evidence records")
+    as_of_date: Optional[str] = Field(None, description="Temporal cutoff used for event evidence")
+    temporal_window_days: int = Field(7, description="Days either side of cutoff searched")
+    total_event_evidence_count: int = 0
+    event_evidence: List["EventEvidenceSummary"] = Field(default_factory=list)
+
+
+class EventEvidenceSummary(BaseModel):
+    evidence_id: str
+    source_name: str
+    evidence_type: str
+    reference_id: Optional[str] = None
+    latitude: float
+    longitude: float
+    distance_m: Optional[float] = None
+    event_start: Optional[str] = None
+    event_end: Optional[str] = None
+    authority_level: Optional[str] = None
+    source_url: Optional[str] = None
+    attributes: Optional[Dict[str, Any]] = None
+
+
+SiteEvidenceResponse.model_rebuild()
 
 
 class ImageryCacheSummary(BaseModel):
@@ -34,10 +56,8 @@ class ImageryCacheSummary(BaseModel):
     cloud_fraction: Optional[float] = None
     prithvi_probability: Optional[float] = None
     status: str = "AVAILABLE"
+    source_uri: Optional[str] = None
     patch_uri: Optional[str] = None
-    patch_base64: Optional[str] = None
     embedding_uri: Optional[str] = None
-    visual_class: Optional[str] = None
-    bands_mean: Optional[Dict[str, float]] = None
-    morphology_summary: Optional[str] = None
-    rescue_decision: Optional[str] = None
+    model_revision: Optional[str] = None
+    failure_reason: Optional[str] = None

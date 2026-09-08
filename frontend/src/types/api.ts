@@ -4,7 +4,7 @@
  */
 
 export interface HealthCheck {
-  status: 'ok' | 'healthy' | 'degraded' | 'down';
+  status: 'READY' | 'DEGRADED_PRITHVI_UNAVAILABLE' | 'STALE_BACKFILL' | 'MODEL_ARTIFACT_MISMATCH' | 'DATABASE_NOT_READY' | 'FIRMS_CREDENTIALS_MISSING';
   database: string;
   postgis_enabled: boolean;
   active_models: Record<string, string>;
@@ -19,15 +19,15 @@ export interface SystemStats {
   model_c_counts: Record<string, number>;
   alert_counts: Record<string, number>;
   latest_firms_date: string | null;
-  data_mode: 'LIVE' | 'REPLAY';
+  data_mode: 'LIVE' | 'STALE_BLOCKED';
 }
 
 export interface SiteCompactProperties {
   site_id: string;
-  a_class: 'INDUSTRIAL' | 'NONINDUSTRIAL' | 'UNKNOWN';
-  a_prob: number;
-  b_state: 'NEW' | 'PERSISTENT' | 'INTERMITTENT' | 'DORMANT' | 'REACTIVATED';
-  c_status: 'NORMAL' | 'ELEVATED' | 'ANOMALOUS' | 'CRITICAL' | 'INSUFFICIENT_HISTORY' | 'NO_RECENT_EVENT';
+  a_class: 'INDUSTRIAL' | 'NONINDUSTRIAL' | 'UNKNOWN' | 'UNAVAILABLE';
+  a_prob: number | null;
+  b_state: 'NEW' | 'PERSISTENT' | 'INTERMITTENT' | 'DORMANT' | 'REACTIVATED' | 'UNAVAILABLE';
+  c_status: 'NORMAL' | 'ELEVATED' | 'ANOMALOUS' | 'CRITICAL' | 'INSUFFICIENT_HISTORY' | 'NO_RECENT_EVENT' | 'UNAVAILABLE';
   c_score: number | null;
   alert_severity?: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO' | 'NONE';
   alert_type?: string | null;
@@ -57,8 +57,12 @@ export interface ModelASummary {
   decision: string;
   core_probability: number;
   prithvi_probability: number | null;
-  prithvi_status: 'NOT_TRIGGERED' | 'TRIGGERED' | 'RESCUED' | 'CONFIRMED' | 'FAILED';
+  prithvi_status: 'NOT_TRIGGERED' | 'PENDING' | 'AVAILABLE' | 'UNAVAILABLE' | 'FAILED' | 'REJECTED_CLOUD';
   model_version: string;
+  feature_version: string | null;
+  feature_as_of_detection_date: string | null;
+  imagery_acquisition_date: string | null;
+  computed_at: string | null;
 }
 
 export interface ModelBSummary {
@@ -168,6 +172,25 @@ export interface SiteEvidenceResponse {
   search_radius_m: number;
   total_evidence_count: number;
   evidence: FacilityEvidenceSummary[];
+  as_of_date: string | null;
+  temporal_window_days: number;
+  total_event_evidence_count: number;
+  event_evidence: EventEvidenceSummary[];
+}
+
+export interface EventEvidenceSummary {
+  evidence_id: string;
+  source_name: string;
+  evidence_type: string;
+  reference_id: string | null;
+  latitude: number;
+  longitude: number;
+  distance_m: number | null;
+  event_start: string | null;
+  event_end: string | null;
+  authority_level: string | null;
+  source_url: string | null;
+  attributes: Record<string, any> | null;
 }
 
 export interface ImageryCacheSummary {
@@ -178,13 +201,11 @@ export interface ImageryCacheSummary {
   cloud_fraction: number | null;
   prithvi_probability: number | null;
   status: string;
+  source_uri: string | null;
   patch_uri: string | null;
-  patch_base64: string | null;
   embedding_uri: string | null;
-  visual_class: string | null;
-  bands_mean: Record<string, number> | null;
-  morphology_summary: string | null;
-  rescue_decision: string | null;
+  model_revision: string | null;
+  failure_reason: string | null;
 }
 
 export interface AlertItem {

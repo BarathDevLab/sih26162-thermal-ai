@@ -1,9 +1,15 @@
+import json
 import os
+from pathlib import Path
+
 import joblib
 import pandas as pd
 from typing import Dict, Any, Optional, Union
 
 MODEL_PATH_DEFAULT = "backend/models/MODEL_A_FINAL.joblib"
+_ROOT = Path(__file__).resolve().parents[3]
+FEATURE_CONFIG_PATH = _ROOT / "backend" / "config" / "model_a_features.json"
+THRESHOLD_CONFIG_PATH = _ROOT / "backend" / "config" / "frozen_thresholds.json"
 
 class ModelAEngine:
     def __init__(self, model_path: str = MODEL_PATH_DEFAULT):
@@ -18,6 +24,18 @@ class ModelAEngine:
             self.pipeline = data
             self.config = {}
 
+        if self.pipeline is None or not hasattr(self.pipeline, "predict_proba"):
+            raise ValueError("MODEL_A_FINAL.joblib does not contain a predict_proba pipeline.")
+
+        with FEATURE_CONFIG_PATH.open("r", encoding="utf-8") as fh:
+            feature_config = json.load(fh)
+        self.feature_names = list(feature_config["ordered_features"])
+        self.feature_version = str(feature_config.get("schema_version", "unknown"))
+
+        artifact_features = getattr(self.pipeline, "feature_names_in_", None)
+        if artifact_features is not None and list(artifact_features) != self.feature_names:
+            raise ValueError("Model A artifact feature order does not match model_a_features.json.")
+
         # Ensure compatibility across scikit-learn versions for unpickled SimpleImputer
         if hasattr(self.pipeline, 'steps'):
             for _, step in self.pipeline.steps:
@@ -25,11 +43,20 @@ class ModelAEngine:
                     step._fill_dtype = getattr(step.statistics_, 'dtype', None)
 
         # Frozen guarded thresholds
-        thresholds = self.config.get('thresholds', {})
-        self.thresh_low = float(thresholds.get('low', 0.405))
-        self.thresh_core = float(thresholds.get('core', 0.885))
-        self.thresh_strong = float(thresholds.get('strong', 0.975))
-        self.thresh_prithvi_rescue = 0.965
+        with THRESHOLD_CONFIG_PATH.open("r", encoding="utf-8") as fh:
+            frozen_thresholds = json.load(fh)["model_a"]
+        artifact_thresholds = self.config.get('thresholds', {})
+        self.thresh_low = float(frozen_thresholds["low"])
+        self.thresh_core = float(frozen_thresholds["core"])
+        self.thresh_strong = float(frozen_thresholds["strong"])
+        self.thresh_prithvi_rescue = float(frozen_thresholds["prithvi_strong_rescue"])
+        for name, expected in (
+            ("low", self.thresh_low),
+            ("core", self.thresh_core),
+            ("strong", self.thresh_strong),
+        ):
+            if name in artifact_thresholds and abs(float(artifact_thresholds[name]) - expected) > 1e-9:
+                raise ValueError(f"Model A artifact threshold '{name}' disagrees with frozen config.")
 
     def predict(
         self,
@@ -44,6 +71,12 @@ class ModelAEngine:
             input_row = features_df.iloc[[0]]
         else:
             input_row = features_df
+
+        actual_features = list(input_row.columns)
+        if actual_features != self.feature_names:
+            raise ValueError(
+                f"Model A feature order mismatch: expected {self.feature_names}, got {actual_features}"
+            )
 
         probs = self.pipeline.predict_proba(input_row)[0]
         # Class 1 is INDUSTRIAL, Class 0 is NONINDUSTRIAL
@@ -76,9 +109,9 @@ class ModelAEngine:
         return {
             "class": predicted_class,
             "decision": decision,
-            "core_probability": round(p_core, 4),
+            "core_probability": p_core,
             "prithvi_used": prithvi_used,
-            "prithvi_probability": round(float(prithvi_probability), 4) if prithvi_probability is not None else None,
+            "prithvi_probability": float(prithvi_probability) if prithvi_probability is not None else None,
             "thresholds": {
                 "low": self.thresh_low,
                 "core": self.thresh_core,

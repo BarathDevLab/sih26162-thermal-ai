@@ -1,24 +1,20 @@
 ﻿import math
+import json
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 from datetime import datetime, date
 from typing import List, Dict, Any, Optional, Union
 
-EARTH_RADIUS_M = 6371000.0
+# Exact radius used by the frozen Model A training notebook.
+EARTH_RADIUS_M = 6371008.8
 
-ORDERED_FEATURES = [
-    'mean_frp', 'median_frp', 'max_frp', 'std_frp', 'frp_cv',
-    'frp_p10', 'frp_p25', 'frp_p75', 'frp_p90', 'frp_iqr',
-    'night_ratio',
-    'detections', 'active_days', 'source_lifetime_days',
-    'active_days_7', 'active_days_30', 'active_days_90', 'active_days_365',
-    'mean_recurrence_gap_days', 'median_recurrence_gap_days',
-    'detections_per_active_day',
-    'spatial_median_m', 'spatial_p90_m', 'spatial_std_m',
-    'tree_fraction', 'shrub_fraction', 'grass_fraction', 'crop_fraction',
-    'built_fraction', 'bare_fraction', 'water_fraction', 'wetland_fraction',
-    'mangrove_fraction'
-]
+_FEATURE_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "model_a_features.json"
+with _FEATURE_CONFIG_PATH.open("r", encoding="utf-8") as _feature_config_file:
+    _FEATURE_CONFIG = json.load(_feature_config_file)
+ORDERED_FEATURES = list(_FEATURE_CONFIG["ordered_features"])
+FEATURE_VERSION = str(_FEATURE_CONFIG.get("schema_version", "unknown"))
 
 def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
@@ -57,7 +53,7 @@ class FeatureBuilder:
             elif isinstance(dt_val, date):
                 dt = dt_val
             else:
-                dt = date.today()
+                raise ValueError("Every detection must contain a valid acq_date.")
             dates.append(dt)
 
         # 1. Thermal features (T) - 11 features
@@ -65,8 +61,11 @@ class FeatureBuilder:
         mean_frp = float(np.mean(frp_arr))
         median_frp = float(np.median(frp_arr))
         max_frp = float(np.max(frp_arr))
-        std_frp = float(np.std(frp_arr)) if len(frp_arr) > 1 else 0.0
-        frp_cv = float(std_frp / (mean_frp + 1e-6))
+        # The frozen notebook used pandas Series.std(), whose default is the
+        # sample standard deviation (ddof=1). A one-row source therefore has
+        # a missing value which is handled by the serialized model's imputer.
+        std_frp = float(np.std(frp_arr, ddof=1)) if len(frp_arr) > 1 else np.nan
+        frp_cv = float(std_frp / max(mean_frp, 1e-6))
         frp_p10 = float(np.percentile(frp_arr, 10))
         frp_p25 = float(np.percentile(frp_arr, 25))
         frp_p75 = float(np.percentile(frp_arr, 75))
@@ -97,20 +96,28 @@ class FeatureBuilder:
             mean_recurrence_gap_days = float(np.mean(gaps))
             median_recurrence_gap_days = float(np.median(gaps))
         else:
-            mean_recurrence_gap_days = 0.0
-            median_recurrence_gap_days = 0.0
+            mean_recurrence_gap_days = np.nan
+            median_recurrence_gap_days = np.nan
 
         # 3. Spatial dispersion features (S) - 3 features
-        lats = [float(d['latitude']) for d in detections if 'latitude' in d]
-        lons = [float(d['longitude']) for d in detections if 'longitude' in d]
+        coordinate_pairs = [
+            (float(d['latitude']), float(d['longitude']))
+            for d in detections
+            if d.get('latitude') is not None and d.get('longitude') is not None
+        ]
+        lats = [pair[0] for pair in coordinate_pairs]
+        lons = [pair[1] for pair in coordinate_pairs]
         
-        c_lat = centroid_lat if centroid_lat is not None else (np.mean(lats) if lats else 0.0)
-        c_lon = centroid_lon if centroid_lon is not None else (np.mean(lons) if lons else 0.0)
+        c_lat = centroid_lat if centroid_lat is not None else (np.median(lats) if lats else 0.0)
+        c_lon = centroid_lon if centroid_lon is not None else (np.median(lons) if lons else 0.0)
 
-        if len(lats) > 1:
-            distances = [haversine_m(lat, lon, c_lat, c_lon) for lat, lon in zip(lats, lons)]
+        if lats:
+            # Match the training notebook's local tangent-plane approximation.
+            dx = EARTH_RADIUS_M * np.cos(np.radians(c_lat)) * np.radians(np.asarray(lons) - c_lon)
+            dy = EARTH_RADIUS_M * np.radians(np.asarray(lats) - c_lat)
+            distances = np.sqrt(dx ** 2 + dy ** 2)
             spatial_median_m = float(np.median(distances))
-            spatial_p90_m = float(np.percentile(distances, 90))
+            spatial_p90_m = float(np.quantile(distances, 0.90))
             spatial_std_m = float(np.std(distances))
         else:
             spatial_median_m = 0.0
@@ -119,15 +126,19 @@ class FeatureBuilder:
 
         # 4. Land cover features (L) - 9 features
         lc = land_cover or {}
-        tree_fraction = float(lc.get('tree_fraction', np.nan))
-        shrub_fraction = float(lc.get('shrub_fraction', np.nan))
-        grass_fraction = float(lc.get('grass_fraction', np.nan))
-        crop_fraction = float(lc.get('crop_fraction', np.nan))
-        built_fraction = float(lc.get('built_fraction', np.nan))
-        bare_fraction = float(lc.get('bare_fraction', np.nan))
-        water_fraction = float(lc.get('water_fraction', np.nan))
-        wetland_fraction = float(lc.get('wetland_fraction', np.nan))
-        mangrove_fraction = float(lc.get('mangrove_fraction', np.nan))
+        def land_cover_value(name: str) -> float:
+            value = lc.get(name)
+            return np.nan if value is None else float(value)
+
+        tree_fraction = land_cover_value('tree_fraction')
+        shrub_fraction = land_cover_value('shrub_fraction')
+        grass_fraction = land_cover_value('grass_fraction')
+        crop_fraction = land_cover_value('crop_fraction')
+        built_fraction = land_cover_value('built_fraction')
+        bare_fraction = land_cover_value('bare_fraction')
+        water_fraction = land_cover_value('water_fraction')
+        wetland_fraction = land_cover_value('wetland_fraction')
+        mangrove_fraction = land_cover_value('mangrove_fraction')
 
         row_dict = {
             'mean_frp': mean_frp,

@@ -70,28 +70,34 @@ export async function fetchSitesInBBox(
   return handleResponse<SiteGeoJSONFeatureCollection>(res);
 }
 
-export async function fetchSiteDetail(siteId: string): Promise<SiteDetail> {
-  const res = await fetch(`${API_BASE}/sites/${encodeURIComponent(siteId)}`);
+export async function fetchSiteDetail(siteId: string, asOfDate?: string): Promise<SiteDetail> {
+  const suffix = asOfDate ? `?as_of_date=${encodeURIComponent(asOfDate)}` : '';
+  const res = await fetch(`${API_BASE}/sites/${encodeURIComponent(siteId)}${suffix}`);
   return handleResponse<SiteDetail>(res);
 }
 
-export async function fetchSiteTimeline(siteId: string): Promise<SiteTimelineResponse> {
-  const res = await fetch(`${API_BASE}/sites/${encodeURIComponent(siteId)}/timeline`);
+export async function fetchSiteTimeline(siteId: string, asOfDate?: string): Promise<SiteTimelineResponse> {
+  const suffix = asOfDate ? `?as_of_date=${encodeURIComponent(asOfDate)}` : '';
+  const res = await fetch(`${API_BASE}/sites/${encodeURIComponent(siteId)}/timeline${suffix}`);
   return handleResponse<SiteTimelineResponse>(res);
 }
 
-export async function fetchSiteDetections(siteId: string): Promise<SiteDetectionsResponse> {
-  const res = await fetch(`${API_BASE}/sites/${encodeURIComponent(siteId)}/detections`);
+export async function fetchSiteDetections(siteId: string, asOfDate?: string): Promise<SiteDetectionsResponse> {
+  const suffix = asOfDate ? `?as_of_date=${encodeURIComponent(asOfDate)}` : '';
+  const res = await fetch(`${API_BASE}/sites/${encodeURIComponent(siteId)}/detections${suffix}`);
   return handleResponse<SiteDetectionsResponse>(res);
 }
 
-export async function fetchSiteEvidence(siteId: string, radiusM: number = 3000): Promise<SiteEvidenceResponse> {
-  const res = await fetch(`${API_BASE}/sites/${encodeURIComponent(siteId)}/evidence?radius_m=${radiusM}`);
+export async function fetchSiteEvidence(siteId: string, radiusM: number = 3000, asOfDate?: string): Promise<SiteEvidenceResponse> {
+  const params = new URLSearchParams({ radius_m: String(radiusM) });
+  if (asOfDate) params.set('as_of_date', asOfDate);
+  const res = await fetch(`${API_BASE}/sites/${encodeURIComponent(siteId)}/evidence?${params}`);
   return handleResponse<SiteEvidenceResponse>(res);
 }
 
-export async function fetchSiteImagery(siteId: string): Promise<ImageryCacheSummary[]> {
-  const res = await fetch(`${API_BASE}/sites/${encodeURIComponent(siteId)}/imagery`);
+export async function fetchSiteImagery(siteId: string, asOfDate?: string): Promise<ImageryCacheSummary[]> {
+  const suffix = asOfDate ? `?as_of_date=${encodeURIComponent(asOfDate)}` : '';
+  const res = await fetch(`${API_BASE}/sites/${encodeURIComponent(siteId)}/imagery${suffix}`);
   return handleResponse<ImageryCacheSummary[]>(res);
 }
 
