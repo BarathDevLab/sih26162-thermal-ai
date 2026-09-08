@@ -44,6 +44,15 @@ class ModelCReplayService:
         if not activities:
             return {"site_id": site_id, "replayed_days": 0, "latest": None}
 
+        existing_rows = {
+            row.acq_date: row
+            for row in (
+                db.query(SiteDailyInference)
+                .filter(SiteDailyInference.site_id == site_id)
+                .all()
+            )
+        }
+
         history = []
         prev_ewma = 0.0
         prev_cusum = 0.0
@@ -66,12 +75,11 @@ class ModelCReplayService:
                 prev_cusum=prev_cusum,
             )
             b_result = self.model_b.predict(active_dates[: index + 1], as_of_date=activity.acq_date)
-            row = db.query(SiteDailyInference).filter_by(
-                site_id=site_id, acq_date=activity.acq_date
-            ).one_or_none()
+            row = existing_rows.get(activity.acq_date)
             if row is None:
                 row = SiteDailyInference(site_id=site_id, acq_date=activity.acq_date)
                 db.add(row)
+                existing_rows[activity.acq_date] = row
             row.model_c_status = result["status"]
             row.c_score = result.get("c_score")
             row.c_raw = result.get("c_raw")

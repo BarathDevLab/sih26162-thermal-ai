@@ -210,8 +210,10 @@ class WorldCoverService:
             # ESA WorldCover masks open ocean as NoData. Preserve that fact as
             # explicit nulls so Model A's frozen missing-value handling is used.
             return {feature: None for feature in CLASS_FEATURES.values()}
+        counts = np.bincount(valid.astype(np.uint8, copy=False), minlength=101)
+        total = float(valid.size)
         return {
-            feature: float(np.mean(valid == code))
+            feature: float(counts[code] / total)
             for code, feature in CLASS_FEATURES.items()
         }
 

@@ -533,6 +533,18 @@ def run_global_daily_model_b_refresh(db: Session, as_of_date: Optional[date] = N
     service = get_live_pipeline_service()
     ref_date = as_of_date or date.today()
     site_ids = [row[0] for row in db.query(SourceSite.site_id).all()]
+    history_count = (
+        db.query(SiteModelBHistory.site_id)
+        .filter(SiteModelBHistory.as_of_date == ref_date)
+        .count()
+    )
+    current_count = db.query(SiteModelB.site_id).count()
+    if history_count == len(site_ids) and current_count == len(site_ids):
+        return {
+            "status": "ALREADY_COMPLETED",
+            "as_of_date": ref_date.isoformat(),
+            "sites_evaluated": len(site_ids),
+        }
     for site_id in site_ids:
         service._refresh_model_b_site(db, site_id, ref_date)
     db.commit()

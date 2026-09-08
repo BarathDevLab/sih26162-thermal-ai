@@ -42,6 +42,7 @@ wheels/
 # Model weight binaries / huge data artifacts
 
 data/cache/
+data/backfill_2026/*.log
 
 *.pt
 *.pth

@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import logging
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -17,6 +18,10 @@ from backend.app.services.live_pipeline import run_global_daily_model_b_refresh
 
 
 def main() -> int:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-through", required=True, help="YYYY-MM-DD")
     parser.add_argument("--source", default=DEFAULT_PRIMARY_SOURCE)

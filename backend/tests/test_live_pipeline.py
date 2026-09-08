@@ -48,6 +48,9 @@ def test_global_daily_model_b_decay():
         assert res["status"] == "COMPLETED"
         assert res["sites_evaluated"] == 1
         assert db.query(SiteModelB).one().state == "DORMANT"
+        rerun = run_global_daily_model_b_refresh(db, as_of_date=date.today())
+        assert rerun["status"] == "ALREADY_COMPLETED"
+        assert rerun["sites_evaluated"] == 1
     finally:
         db.close()
 

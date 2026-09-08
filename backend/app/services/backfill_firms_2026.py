@@ -28,7 +28,7 @@ from backend.app.services.firms_client import (
     FirmsClient,
 )
 from backend.app.services.live_pipeline import LivePipelineService, run_global_daily_model_b_refresh
-from backend.app.services.model_a_service import ModelAInputUnavailable
+from backend.app.services.model_a_service import LAND_COVER_FEATURES, ModelAInputUnavailable
 from backend.app.services.feature_validation import feature_validation_issue
 from backend.app.services.stack_readiness import (
     PROJECT_ROOT, REQUIRED_FILES, _active_manifest_issue, _verify_declared_checksums,
@@ -358,41 +358,71 @@ class BackfillOrchestrator:
     ) -> Dict[str, str]:
         """Make reruns idempotently materialize A and C through the requested cutoff."""
         accepted_sources = NOAA20_SOURCE_FAMILY if source == DEFAULT_PRIMARY_SOURCE else (source,)
-        site_ids = [
-            row[0]
-            for row in (
-                db.query(FirmsDetection.source_site_id)
-                .filter(
-                    FirmsDetection.source_sensor.in_(accepted_sources),
-                    FirmsDetection.acq_date >= start,
-                    FirmsDetection.acq_date <= target,
-                    FirmsDetection.source_site_id.isnot(None),
-                )
-                .distinct()
-                .all()
+        touched_sites = (
+            db.query(FirmsDetection.source_site_id.label("site_id"))
+            .filter(
+                FirmsDetection.source_sensor.in_(accepted_sources),
+                FirmsDetection.acq_date >= start,
+                FirmsDetection.acq_date <= target,
+                FirmsDetection.source_site_id.isnot(None),
             )
-        ]
+            .distinct()
+            .subquery()
+        )
+        sites = (
+            db.query(SourceSite)
+            .join(touched_sites, SourceSite.site_id == touched_sites.c.site_id)
+            .all()
+        )
+        site_ids = [site.site_id for site in sites]
         unavailable: Dict[str, str] = {}
-        for site_id in site_ids:
-            a_result = None
-            try:
-                a_result = self.pipeline.model_a.score_site(
-                    db, site_id, cutoff=target, source_sensor=source
-                )
-            except ModelAInputUnavailable as exc:
-                unavailable[site_id] = str(exc)
-            c_result = self.pipeline.model_c_replay.replay_site(db, site_id, cutoff=target)
-            if a_result is None:
-                continue
-            b_row = db.query(SiteModelB).filter_by(site_id=site_id).one()
-            self.pipeline._evaluate_alert(
-                db,
-                site_id,
-                c_result.get("event_date") or target,
-                a_result,
-                {"state": b_row.state, "confidence": b_row.confidence},
-                c_result.get("latest") or {"status": "INSUFFICIENT_HISTORY"},
+        sites_by_id = {site.site_id: site for site in sites}
+        missing_worldcover = {
+            site.site_id: (site.latitude, site.longitude)
+            for site in sites
+            if any(
+                feature not in (site.land_cover or {})
+                for feature in LAND_COVER_FEATURES
             )
+        }
+        if missing_worldcover:
+            logger.info(
+                "Hydrating WorldCover for %d sites in tile batches",
+                len(missing_worldcover),
+            )
+            fractions, worldcover_errors = (
+                self.pipeline.model_a.worldcover.get_fractions_many(missing_worldcover)
+            )
+            for site_id, extracted in fractions.items():
+                site = sites_by_id[site_id]
+                site.land_cover = {**(site.land_cover or {}), **extracted}
+            unavailable.update(worldcover_errors)
+            db.commit()
+
+        total_sites = len(site_ids)
+        for index, site_id in enumerate(site_ids, start=1):
+            a_result = None
+            if site_id not in unavailable:
+                try:
+                    a_result = self.pipeline.model_a.score_site(
+                        db, site_id, cutoff=target, source_sensor=source
+                    )
+                except ModelAInputUnavailable as exc:
+                    unavailable[site_id] = str(exc)
+            c_result = self.pipeline.model_c_replay.replay_site(db, site_id, cutoff=target)
+            if a_result is not None:
+                b_row = db.query(SiteModelB).filter_by(site_id=site_id).one()
+                self.pipeline._evaluate_alert(
+                    db,
+                    site_id,
+                    c_result.get("event_date") or target,
+                    a_result,
+                    {"state": b_row.state, "confidence": b_row.confidence},
+                    c_result.get("latest") or {"status": "INSUFFICIENT_HISTORY"},
+                )
+            if index % 500 == 0:
+                db.commit()
+                logger.info("Materialized Model A/C for %d/%d sites", index, total_sites)
         db.commit()
         return unavailable
 
