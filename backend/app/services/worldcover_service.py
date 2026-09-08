@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -29,6 +30,26 @@ CLASS_FEATURES = {
     90: "wetland_fraction",
     95: "mangrove_fraction",
 }
+
+
+def configure_rasterio_environment() -> None:
+    """Keep Rasterio isolated from incompatible system/PostGIS GDAL data."""
+    spec = importlib.util.find_spec("rasterio")
+    if spec is None or spec.origin is None:
+        raise WorldCoverUnavailable("rasterio is not installed.")
+    package_dir = Path(spec.origin).resolve().parent
+    proj_data = package_dir / "proj_data"
+    gdal_data = package_dir / "gdal_data"
+    if not (proj_data / "proj.db").is_file() or not gdal_data.is_dir():
+        raise WorldCoverUnavailable(
+            f"Rasterio's bundled PROJ/GDAL data directories are incomplete under {package_dir}."
+        )
+    # PostgreSQL installers commonly add their PostGIS copies globally. Those
+    # files are for the database server and can be schema-incompatible with
+    # Rasterio's bundled GDAL/PROJ build. Override only this Python process.
+    os.environ["PROJ_DATA"] = str(proj_data)
+    os.environ["PROJ_LIB"] = str(proj_data)
+    os.environ["GDAL_DATA"] = str(gdal_data)
 
 
 class WorldCoverUnavailable(RuntimeError):
@@ -104,10 +125,11 @@ class WorldCoverService:
                 errors[site_id] = str(exc)
 
         try:
+            configure_rasterio_environment()
             import rasterio
             from rasterio.windows import from_bounds
-        except ImportError as exc:
-            message = "rasterio is not installed."
+        except (ImportError, WorldCoverUnavailable) as exc:
+            message = str(exc) or "rasterio is not installed."
             return results, {**errors, **{
                 site_id: message
                 for entries in grouped.values()
@@ -169,10 +191,11 @@ class WorldCoverService:
     @staticmethod
     def _read_window(url: str, latitude: float, longitude: float) -> np.ndarray:
         try:
+            configure_rasterio_environment()
             import rasterio
             from rasterio.windows import from_bounds
-        except ImportError as exc:
-            raise WorldCoverUnavailable("rasterio is not installed.") from exc
+        except (ImportError, WorldCoverUnavailable) as exc:
+            raise WorldCoverUnavailable(str(exc) or "rasterio is not installed.") from exc
 
         try:
             with rasterio.Env(

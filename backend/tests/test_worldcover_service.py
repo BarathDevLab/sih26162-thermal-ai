@@ -1,6 +1,12 @@
+import os
+from pathlib import Path
+
 import numpy as np
 
-from backend.app.services.worldcover_service import WorldCoverService
+from backend.app.services.worldcover_service import (
+    WorldCoverService,
+    configure_rasterio_environment,
+)
 
 
 def test_worldcover_tile_id_supports_all_hemispheres():
@@ -53,3 +59,17 @@ def test_worldcover_ocean_nodata_is_cached_as_explicit_nulls(tmp_path, monkeypat
     assert first == second
     assert all(value is None for value in first.values())
     assert len(calls) == 1
+
+
+def test_rasterio_uses_its_bundled_proj_and_gdal_data(monkeypatch):
+    monkeypatch.setenv("PROJ_LIB", r"C:\Program Files\PostgreSQL\18\postgis\proj")
+    monkeypatch.setenv("GDAL_DATA", r"C:\Program Files\PostgreSQL\18\gdal-data")
+
+    configure_rasterio_environment()
+
+    import rasterio
+
+    package_dir = Path(rasterio.__file__).resolve().parent
+    assert Path(os.environ["PROJ_LIB"]) == package_dir / "proj_data"
+    assert Path(os.environ["PROJ_DATA"]) == package_dir / "proj_data"
+    assert Path(os.environ["GDAL_DATA"]) == package_dir / "gdal_data"
