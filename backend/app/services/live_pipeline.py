@@ -507,7 +507,11 @@ class LivePipelineService:
         )
         if alert["alert_level"] in ("NONE", "INFO"):
             return 0
-        fingerprint = alert["alert_fingerprint"]
+        # DecisionEngine returns the existing alert payload when a same-day
+        # evaluation would not escalate it. Nothing needs to be rewritten.
+        fingerprint = alert.get("alert_fingerprint")
+        if not fingerprint:
+            return 0
         row = db.query(Alert).filter_by(fingerprint=fingerprint).one_or_none()
         if row is None:
             row = Alert(

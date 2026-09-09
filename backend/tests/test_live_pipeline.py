@@ -8,7 +8,7 @@ from sqlalchemy.orm import sessionmaker
 from backend.app.main import app
 from backend.app.db.session import Base
 from backend.app.db.models import (
-    CandidateSource, CandidateSourceDetection, FirmsDetection, SourceSite,
+    Alert, CandidateSource, CandidateSourceDetection, FirmsDetection, SourceSite,
     SiteDailyActivity, SiteModelB,
 )
 from backend.app.services.live_pipeline import LivePipelineService, run_global_daily_model_b_refresh
@@ -51,6 +51,47 @@ def test_global_daily_model_b_decay():
         rerun = run_global_daily_model_b_refresh(db, as_of_date=date.today())
         assert rerun["status"] == "ALREADY_COMPLETED"
         assert rerun["sites_evaluated"] == 1
+    finally:
+        db.close()
+
+
+def test_same_day_non_escalation_does_not_require_new_fingerprint():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine)()
+    site_id = "SITE_ALERT_EXISTING"
+    site_day = date(2026, 1, 1)
+    try:
+        db.add(SourceSite(site_id=site_id, latitude=20.0, longitude=75.0))
+        db.add(Alert(
+            alert_id="ALERT_EXISTING",
+            site_id=site_id,
+            site_day=site_day,
+            alert_type="INDUSTRIAL_ANOMALY",
+            alert_level="HIGH",
+            headline="Existing alert",
+            fingerprint="existing-fingerprint",
+            status="ACTIVE",
+        ))
+        db.commit()
+
+        class ExistingDecision:
+            def evaluate(self, **kwargs):
+                return kwargs["existing_alert"]
+
+        service = object.__new__(LivePipelineService)
+        service.decision = ExistingDecision()
+        result = service._evaluate_alert(
+            db,
+            site_id,
+            site_day,
+            {"decision": "INDUSTRIAL_CORE_STRONG"},
+            {"state": "PERSISTENT", "confidence": "HIGH"},
+            {"status": "ANOMALOUS"},
+        )
+
+        assert result == 0
+        assert db.query(Alert).count() == 1
     finally:
         db.close()
 

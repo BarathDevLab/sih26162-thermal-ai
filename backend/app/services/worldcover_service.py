@@ -5,8 +5,10 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import logging
 import math
 import os
+import time
 from pathlib import Path
 from collections import defaultdict
 from typing import Dict, Mapping, Optional, Tuple
@@ -14,6 +16,7 @@ from typing import Dict, Mapping, Optional, Tuple
 import numpy as np
 
 
+logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 WORLDCOVER_VERSION = "v200-2021"
 DEFAULT_BASE_URL = (
@@ -30,6 +33,20 @@ CLASS_FEATURES = {
     90: "wetland_fraction",
     95: "mangrove_fraction",
 }
+TRANSIENT_REMOTE_ERRORS = (
+    "could not resolve host",
+    "couldn't resolve host",
+    "connection reset",
+    "connection timed out",
+    "failed to connect",
+    "http response code: 429",
+    "http response code: 500",
+    "http response code: 502",
+    "http response code: 503",
+    "http response code: 504",
+    "temporary failure",
+)
+REMOTE_RETRY_DELAYS_SECONDS = (2, 5, 10)
 
 
 def configure_rasterio_environment() -> None:
@@ -136,8 +153,16 @@ class WorldCoverService:
                 for site_id, _, _, _ in entries
             }}
 
-        for tile, entries in grouped.items():
+        tile_groups = list(grouped.items())
+        for tile_index, (tile, entries) in enumerate(tile_groups, start=1):
             url = f"{self.base_url}/ESA_WorldCover_10m_2021_v200_{tile}_Map.tif"
+            logger.info(
+                "WorldCover tile %d/%d: %s (%d uncached sites)",
+                tile_index,
+                len(tile_groups),
+                tile,
+                len(entries),
+            )
             try:
                 with rasterio.Env(
                     GDAL_DISABLE_READDIR_ON_OPEN="EMPTY_DIR",
@@ -145,13 +170,19 @@ class WorldCoverService:
                     GDAL_HTTP_MAX_RETRY="3",
                     GDAL_HTTP_RETRY_DELAY="1",
                 ):
-                    with rasterio.open(url) as source:
+                    source = self._open_remote_with_retry(rasterio, url)
+                    with source:
                         for site_id, latitude, longitude, cache_path in entries:
+                            # A previous attempt may have completed part of this tile.
+                            cached = self._read_cache(cache_path)
+                            if cached is not None:
+                                results[site_id] = cached
+                                continue
                             try:
                                 bounds = self._window_bounds(latitude, longitude)
                                 window = from_bounds(*bounds, source.transform)
-                                pixels = source.read(
-                                    1, window=window, boundless=True, fill_value=0
+                                pixels = self._read_source_with_retry(
+                                    source, window, site_id=site_id, tile=tile
                                 )
                                 fractions = self._fractions_from_pixels(pixels)
                                 self._write_cache(cache_path, {
@@ -163,13 +194,67 @@ class WorldCoverService:
                                     "fractions": fractions,
                                 })
                                 results[site_id] = fractions
+                            except WorldCoverUnavailable:
+                                raise
                             except Exception as exc:
                                 errors[site_id] = str(exc)
+            except WorldCoverUnavailable:
+                raise
             except Exception as exc:
                 message = f"Unable to read WorldCover COG {url}: {exc}"
                 for site_id, _, _, _ in entries:
                     errors.setdefault(site_id, message)
         return results, errors
+
+    @staticmethod
+    def _is_transient_remote_error(exc: Exception) -> bool:
+        message = str(exc).lower()
+        return any(marker in message for marker in TRANSIENT_REMOTE_ERRORS)
+
+    @classmethod
+    def _open_remote_with_retry(cls, rasterio, url: str):
+        for attempt in range(len(REMOTE_RETRY_DELAYS_SECONDS) + 1):
+            try:
+                return rasterio.open(url)
+            except Exception as exc:
+                if not cls._is_transient_remote_error(exc):
+                    raise
+                if attempt >= len(REMOTE_RETRY_DELAYS_SECONDS):
+                    raise WorldCoverUnavailable(
+                        f"Transient WorldCover network failure opening {url} after retries: {exc}"
+                    ) from exc
+                delay = REMOTE_RETRY_DELAYS_SECONDS[attempt]
+                logger.warning(
+                    "Transient WorldCover open failure; retrying in %ds (%d/%d): %s",
+                    delay,
+                    attempt + 1,
+                    len(REMOTE_RETRY_DELAYS_SECONDS),
+                    exc,
+                )
+                time.sleep(delay)
+
+    @classmethod
+    def _read_source_with_retry(cls, source, window, site_id: str, tile: str):
+        for attempt in range(len(REMOTE_RETRY_DELAYS_SECONDS) + 1):
+            try:
+                return source.read(1, window=window, boundless=True, fill_value=0)
+            except Exception as exc:
+                if not cls._is_transient_remote_error(exc):
+                    raise
+                if attempt >= len(REMOTE_RETRY_DELAYS_SECONDS):
+                    raise WorldCoverUnavailable(
+                        f"Transient WorldCover network failure reading {tile} for {site_id} "
+                        f"after retries: {exc}"
+                    ) from exc
+                delay = REMOTE_RETRY_DELAYS_SECONDS[attempt]
+                logger.warning(
+                    "Transient WorldCover read failure for %s; retrying in %ds (%d/%d)",
+                    site_id,
+                    delay,
+                    attempt + 1,
+                    len(REMOTE_RETRY_DELAYS_SECONDS),
+                )
+                time.sleep(delay)
 
     @staticmethod
     def tile_id(latitude: float, longitude: float) -> str:

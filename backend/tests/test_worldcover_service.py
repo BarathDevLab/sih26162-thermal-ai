@@ -2,9 +2,11 @@ import os
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from backend.app.services.worldcover_service import (
     WorldCoverService,
+    WorldCoverUnavailable,
     configure_rasterio_environment,
 )
 
@@ -73,3 +75,20 @@ def test_rasterio_uses_its_bundled_proj_and_gdal_data(monkeypatch):
     assert Path(os.environ["PROJ_LIB"]) == package_dir / "proj_data"
     assert Path(os.environ["PROJ_DATA"]) == package_dir / "proj_data"
     assert Path(os.environ["GDAL_DATA"]) == package_dir / "gdal_data"
+
+
+def test_transient_worldcover_open_is_retried_then_fails_fast(monkeypatch):
+    class StubRasterio:
+        calls = 0
+
+        @classmethod
+        def open(cls, url):
+            cls.calls += 1
+            raise RuntimeError("CURL error: Could not resolve host: example.invalid")
+
+    monkeypatch.setattr("backend.app.services.worldcover_service.time.sleep", lambda _: None)
+
+    with pytest.raises(WorldCoverUnavailable, match="after retries"):
+        WorldCoverService._open_remote_with_retry(StubRasterio, "https://example.invalid/tile.tif")
+
+    assert StubRasterio.calls == 4
