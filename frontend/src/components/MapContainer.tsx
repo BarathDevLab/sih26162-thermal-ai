@@ -14,7 +14,18 @@ interface MapContainerProps {
   filters: FilterState;
   is3D: boolean;
   focusedCoordinates?: [number, number] | null;
+  isLoading: boolean;
 }
+
+function isSiteVisible(feature: SiteGeoJSONFeature, filters: FilterState): boolean {
+  const properties = feature.properties;
+  if (filters.aClasses.length > 0 && !filters.aClasses.includes(properties.a_class)) return false;
+  if (filters.bStates.length > 0 && !filters.bStates.includes(properties.b_state)) return false;
+  if (filters.cStatuses.length > 0 && !filters.cStatuses.includes(properties.c_status)) return false;
+  return true;
+}
+
+const MAX_3D_COLUMNS = 2500;
 
 // 1. Photorealistic Earth Satellite Globe Style (ESRI World Imagery)
 const SATELLITE_GLOBE_STYLE: maplibregl.StyleSpecification = {
@@ -108,7 +119,8 @@ export const MapContainer: React.FC<MapContainerProps> = ({
   onBoundsChange,
   filters,
   is3D,
-  focusedCoordinates
+  focusedCoordinates,
+  isLoading
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
@@ -120,6 +132,7 @@ export const MapContainer: React.FC<MapContainerProps> = ({
   const [showHeatBloom, setShowHeatBloom] = useState<boolean>(true);
   const [showSwaths, setShowSwaths] = useState<boolean>(true);
   const [show3DColumns, setShow3DColumns] = useState<boolean>(true);
+  const [viewZoom, setViewZoom] = useState<number>(is3D ? 2.5 : 4.8);
 
   const onSelectSiteRef = useRef(onSelectSite);
   const onBoundsChangeRef = useRef(onBoundsChange);
@@ -760,8 +773,8 @@ export const MapContainer: React.FC<MapContainerProps> = ({
           const clusterHtml = `
             <div style="font-family: monospace; font-size: 10.5px; line-height: 1.4;">
               <div style="font-weight: bold; color: #38bdf8;">THERMAL CORRIDOR</div>
-              <div style="color: #94a3b8; font-size: 9.5px;">Total Dissipation Points: <span style="color: #ffffff; font-weight: bold;">${p.point_count}</span></div>
-              <div style="color: #34d399; font-size: 9px; margin-top: 2px;">Click to zoom into cluster micro-sites</div>
+              <div style="color: #94a3b8; font-size: 9.5px;">Loaded sites in cluster: <span style="color: #ffffff; font-weight: bold;">${p.point_count}</span></div>
+              <div style="color: #34d399; font-size: 9px; margin-top: 2px;">Zooming reveals additional sites when the viewport is capped</div>
             </div>
           `;
           popup.setLngLat(coordinates).setHTML(clusterHtml).addTo(map);
@@ -798,6 +811,7 @@ export const MapContainer: React.FC<MapContainerProps> = ({
       // Bounds change listener
       const reportBounds = () => {
         const b = map.getBounds();
+        setViewZoom(map.getZoom());
         onBoundsChangeRef.current([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]);
       };
 
@@ -894,13 +908,9 @@ export const MapContainer: React.FC<MapContainerProps> = ({
     const deck = deckOverlayRef.current;
     if (!map || !sitesData) return;
 
-    const filteredFeatures: SiteGeoJSONFeature[] = sitesData.features.filter(f => {
-      const p = f.properties;
-      if (filters.aClasses.length > 0 && !filters.aClasses.includes(p.a_class)) return false;
-      if (filters.bStates.length > 0 && !filters.bStates.includes(p.b_state)) return false;
-      if (filters.cStatuses.length > 0 && !filters.cStatuses.includes(p.c_status)) return false;
-      return true;
-    });
+    const filteredFeatures: SiteGeoJSONFeature[] = sitesData.features.filter(
+      feature => isSiteVisible(feature, filters)
+    );
 
     const source = map.getSource('sites-geojson') as maplibregl.GeoJSONSource | undefined;
     if (source && typeof source.setData === 'function') {
@@ -934,12 +944,15 @@ export const MapContainer: React.FC<MapContainerProps> = ({
     // Update 3D Deck.gl Volumetric Columns (Thermal FRP Plumes)
     if (deck) {
       try {
-        if (is3D && show3DColumns && filteredFeatures.length > 0) {
+        // At national/regional zoom levels MapLibre clusters are substantially
+        // cheaper and clearer than thousands of extruded deck.gl columns.
+        if (is3D && show3DColumns && viewZoom >= 7 && filteredFeatures.length > 0) {
           const spikeScale = filters.spikeHeightScale * 32000;
+          const columnFeatures = filteredFeatures.slice(0, MAX_3D_COLUMNS);
 
           const columnLayer = new ColumnLayer({
             id: 'thermal-3d-spikes',
-            data: filteredFeatures,
+            data: columnFeatures,
             diskResolution: 16,
             radius: 1400,
             extruded: true,
@@ -987,7 +1000,12 @@ export const MapContainer: React.FC<MapContainerProps> = ({
         console.warn('Deck.gl layer update error:', deckUpdateErr);
       }
     }
-  }, [sitesData, filters, is3D, selectedSiteId, showSatellites, showHeatBloom, showSwaths, show3DColumns]);
+  }, [sitesData, filters, is3D, selectedSiteId, showSatellites, showHeatBloom, showSwaths, show3DColumns, viewZoom]);
+
+  const visibleSiteCount = sitesData?.features.reduce(
+    (count, feature) => count + (isSiteVisible(feature, filters) ? 1 : 0),
+    0
+  ) ?? 0;
 
   return (
     <div className="relative w-full h-full flex-1 bg-[#02040a] overflow-hidden">
@@ -1097,8 +1115,14 @@ export const MapContainer: React.FC<MapContainerProps> = ({
       <div className="absolute bottom-4 left-4 z-10 hidden sm:flex items-center gap-3 px-3.5 py-1.5 rounded-lg tactical-glass border border-white/15 text-[10px] font-mono shadow-2xl">
         <div className="flex items-center gap-1.5 text-slate-300">
           <Sparkles className="w-3 h-3 text-cyan-400" />
-          <span className="text-slate-400">VIEWPORT SITES:</span>
-          <span className="font-bold text-white">{sitesData?.features?.length?.toLocaleString() ?? 0}</span>
+          <span className="text-slate-400">RENDERED:</span>
+          <span className="font-bold text-white">{visibleSiteCount.toLocaleString()}</span>
+          {sitesData && sitesData.total_count > sitesData.returned_count && (
+            <span className="text-slate-500">
+              of {sitesData.total_count.toLocaleString()} matched
+            </span>
+          )}
+          {isLoading && <span className="text-cyan-300 animate-pulse">UPDATING</span>}
         </div>
         <div className="w-[1px] h-3 bg-white/20" />
         <div className="flex items-center gap-1.5 text-slate-300">

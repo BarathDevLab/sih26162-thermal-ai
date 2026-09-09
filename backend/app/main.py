@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from typing import Dict, Any
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from sqlalchemy import text
 
 from backend.app.db.session import engine, is_postgis_available, SessionLocal
@@ -92,8 +93,12 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/api/v1/openapi.json",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
+
+# Viewport GeoJSON is the largest routine response. Compress it before it
+# crosses the Vite/nginx boundary while keeping tiny control responses cheap.
+app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=5)
 
 # CORS configuration for OSIRIS web command center
 origins = [

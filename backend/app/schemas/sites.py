@@ -33,6 +33,8 @@ class SiteGeoJSONFeatureCollection(BaseModel):
     type: str = "FeatureCollection"
     features: List[SiteGeoJSONFeature]
     total_count: int = Field(..., description="Total count matching query filters")
+    returned_count: int = Field(..., description="Number of site features included in this response")
+    truncated: bool = Field(..., description="Whether matching sites were omitted by the response limit")
 
 
 # Detailed Site Intelligence Schemas

@@ -9,7 +9,7 @@ from datetime import date
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import select, or_
+from sqlalchemy import func, select, or_, text
 from sqlalchemy.orm import aliased
 
 from backend.app.db.session import get_db
@@ -85,7 +85,8 @@ def get_sites(
                 SiteModelC.operational_status.label("c_status"),
                 SiteModelC.c_score.label("c_score"),
                 active_alert.alert_level.label("alert_severity"),
-                active_alert.alert_type.label("alert_type")
+                active_alert.alert_type.label("alert_type"),
+                func.count(SourceSite.site_id).over().label("matched_count"),
             )
             .outerjoin(SiteModelA, SourceSite.site_id == SiteModelA.site_id)
             .outerjoin(SiteModelB, SourceSite.site_id == SiteModelB.site_id)
@@ -100,12 +101,29 @@ def get_sites(
                 if len(parts) != 4:
                     raise ValueError("BBox must have 4 comma-separated values.")
                 min_lon, min_lat, max_lon, max_lat = parts
-                query = query.filter(
-                    SourceSite.longitude >= min_lon,
-                    SourceSite.longitude <= max_lon,
-                    SourceSite.latitude >= min_lat,
-                    SourceSite.latitude <= max_lat
-                )
+                if min_lon > max_lon or min_lat > max_lat:
+                    raise ValueError("BBox minimums must not exceed maximums.")
+                if db.get_bind().dialect.name == "postgresql":
+                    # Use the migration-managed geometry column so PostgreSQL can
+                    # satisfy viewport requests through the PostGIS GIST index.
+                    query = query.filter(
+                        text(
+                            "source_sites.geometry && "
+                            "ST_MakeEnvelope(:min_lon, :min_lat, :max_lon, :max_lat, 4326)"
+                        )
+                    ).params(
+                        min_lon=min_lon,
+                        min_lat=min_lat,
+                        max_lon=max_lon,
+                        max_lat=max_lat,
+                    )
+                else:
+                    query = query.filter(
+                        SourceSite.longitude >= min_lon,
+                        SourceSite.longitude <= max_lon,
+                        SourceSite.latitude >= min_lat,
+                        SourceSite.latitude <= max_lat
+                    )
             except Exception as e:
                 raise HTTPException(status_code=400, detail=f"Invalid bbox parameter: {e}")
 
@@ -125,8 +143,19 @@ def get_sites(
         if alert_severity:
             query = query.filter(active_alert.alert_level == alert_severity.upper())
 
-        # Fetch limited records
-        rows = query.limit(limit).all()
+        # Prioritize actionable/recent sites and keep the capped result stable.
+        # The window count preserves the real number of matches in one query.
+        rows = (
+            query.order_by(
+                active_alert.updated_at.desc().nullslast(),
+                SiteModelC.c_score.desc().nullslast(),
+                SourceSite.latest_seen.desc().nullslast(),
+                SourceSite.site_id,
+            )
+            .limit(limit)
+            .all()
+        )
+        total_count = int(rows[0].matched_count) if rows else 0
 
         features: List[SiteGeoJSONFeature] = []
         for r in rows:
@@ -151,7 +180,9 @@ def get_sites(
 
         return SiteGeoJSONFeatureCollection(
             features=features,
-            total_count=len(features)
+            total_count=total_count,
+            returned_count=len(features),
+            truncated=total_count > len(features),
         )
     except HTTPException:
         raise

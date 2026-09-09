@@ -64,6 +64,11 @@ def test_sites_geojson_endpoint():
     assert "features" in geojson
     assert len(geojson["features"]) <= 25
     assert "total_count" in geojson
+    assert geojson["returned_count"] == len(geojson["features"])
+    assert geojson["total_count"] >= geojson["returned_count"]
+    assert geojson["truncated"] == (
+        geojson["total_count"] > geojson["returned_count"]
+    )
 
     if geojson["features"]:
         feat = geojson["features"][0]
@@ -95,6 +100,12 @@ def test_sites_bbox_filtering():
 def test_sites_invalid_bbox():
     """Verify /api/v1/sites handles invalid bbox strings gracefully with 400."""
     response = client.get("/api/v1/sites?bbox=invalid_bbox_str")
+    assert response.status_code == 400
+
+
+def test_sites_rejects_reversed_bbox():
+    """Viewport minimum coordinates must not exceed their maximums."""
+    response = client.get("/api/v1/sites?bbox=82.0,26.0,75.0,20.0")
     assert response.status_code == 400
 
 

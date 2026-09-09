@@ -23,13 +23,17 @@ import type { FilterState } from '../types/api';
 interface SidebarFiltersProps {
   filters: FilterState;
   onChange: (f: FilterState) => void;
-  siteCount: number;
+  loadedSiteCount: number;
+  totalSiteCount: number;
+  isLoading: boolean;
 }
 
 export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
   filters,
   onChange,
-  siteCount
+  loadedSiteCount,
+  totalSiteCount,
+  isLoading
 }) => {
   const [openSections, setOpenSections] = useState({
     modelA: true,
@@ -71,10 +75,16 @@ export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
         </div>
         <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-900/90 border border-white/10">
           <ResolverIcon className="w-3 h-3 text-cyan-400" />
-          <span className="text-[10px] font-mono text-cyan-300 font-semibold">
-            {siteCount.toLocaleString()}
+          <span
+            className="text-[10px] font-mono text-cyan-300 font-semibold"
+            title={`${loadedSiteCount.toLocaleString()} loaded of ${totalSiteCount.toLocaleString()} matching viewport sites`}
+          >
+            {loadedSiteCount.toLocaleString()}
+            {totalSiteCount > loadedSiteCount ? `/${totalSiteCount.toLocaleString()}` : ''}
           </span>
-          <span className="text-[9px] font-mono text-slate-400">SITES</span>
+          <span className="text-[9px] font-mono text-slate-400">
+            {isLoading ? 'SYNC' : totalSiteCount > loadedSiteCount ? 'LOADED' : 'SITES'}
+          </span>
         </div>
       </div>
 

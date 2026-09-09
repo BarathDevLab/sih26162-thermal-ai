@@ -54,7 +54,8 @@ export interface BBoxSiteFilters {
 
 export async function fetchSitesInBBox(
   bbox?: [number, number, number, number], // [min_lon, min_lat, max_lon, max_lat]
-  filters: BBoxSiteFilters = {}
+  filters: BBoxSiteFilters = {},
+  signal?: AbortSignal
 ): Promise<SiteGeoJSONFeatureCollection> {
   const params = new URLSearchParams();
   if (bbox) {
@@ -66,7 +67,7 @@ export async function fetchSitesInBBox(
   if (filters.severity) params.set('severity', filters.severity);
   params.set('limit', String(filters.limit || 3000));
 
-  const res = await fetch(`${API_BASE}/sites?${params.toString()}`);
+  const res = await fetch(`${API_BASE}/sites?${params.toString()}`, { signal });
   return handleResponse<SiteGeoJSONFeatureCollection>(res);
 }
 
@@ -130,7 +131,8 @@ export async function acknowledgeAlert(
 export async function fetchReplaySnapshot(
   dateStr: string,
   bbox?: [number, number, number, number],
-  limit: number = 3000
+  limit: number = 3000,
+  signal?: AbortSignal
 ): Promise<ReplaySnapshotResponse> {
   const params = new URLSearchParams();
   params.set('date', dateStr);
@@ -139,7 +141,7 @@ export async function fetchReplaySnapshot(
   }
   params.set('limit', String(limit));
 
-  const res = await fetch(`${API_BASE}/replay?${params.toString()}`);
+  const res = await fetch(`${API_BASE}/replay?${params.toString()}`, { signal });
   return handleResponse<ReplaySnapshotResponse>(res);
 }
 

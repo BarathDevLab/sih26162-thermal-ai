@@ -50,6 +50,8 @@ export interface SiteGeoJSONFeatureCollection {
   type: 'FeatureCollection';
   features: SiteGeoJSONFeature[];
   total_count: number;
+  returned_count: number;
+  truncated: boolean;
 }
 
 export interface ModelASummary {
