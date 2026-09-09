@@ -1,0 +1,10 @@
+{
+  "model": "Prithvi-EO-2.0-300M",
+  "role": "visual rescue for uncertain A-Core cases",
+  "embedding_dim": 1024,
+  "threshold": 0.965,
+  "a_core_low": 0.405,
+  "a_core_core": 0.885,
+  "a_core_strong": 0.975,
+  "policy": "Prithvi may rescue uncertain A-Core; it never vetoes CORE/STRONG A-Core"
+}

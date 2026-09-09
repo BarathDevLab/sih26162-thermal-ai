@@ -31,9 +31,19 @@
       "sha256": "bc67a349b057cd5fa13db3300fb7cc7fe80ca4a1e3051d0caaade2edbe1bda7a"
     },
     {
+      "repo_path": "backend/config/source/prithvi_final_config.json",
+      "required": false,
+      "sha256": "061fe2d7f522299bebc48f95a2a0c15b72ad4b40d0b70cb20c98785898cd3dd6"
+    },
+    {
       "repo_path": "backend/models/MODEL_A_FINAL.joblib",
       "required": true,
       "sha256": "5b00758fb3c1f456a911d0cd37fe1a06328181036ac3e489371da43c1e99d5b6"
+    },
+    {
+      "repo_path": "backend/models/MODEL_A_PRITHVI_FINAL.joblib",
+      "required": false,
+      "sha256": "f3f80f2724f29238013b7029e224a0196413008701c5322a77dea7dfdbb0d19f"
     },
     {
       "repo_path": "backend/models/MODEL_C_V3_FROZEN.joblib",
@@ -87,7 +97,7 @@
     }
   ],
   "feature_validation": "PASS",
-  "generated_at": "2026-09-08T12:33:34.688171+00:00",
+  "generated_at": "2026-09-09T13:39:56.628367+00:00",
   "model_stack_version": "2026-09-04-r1",
   "schema_version": "1.0",
   "status": "READY_FOR_BOOTSTRAP"
