@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from backend.app.db.models import ModelVersion, StackSnapshot
 from backend.app.engines.model_a import ModelAEngine
 from backend.app.engines.model_c import ModelCEngine
+from backend.app.services.artifact_hashing import checksum_matches, sha256_variants
 from backend.app.services.feature_validation import feature_validation_issue
 from backend.app.services.feature_builder import FEATURE_VERSION
 from backend.app.services.prithvi_service import prithvi_readiness_issue
@@ -234,12 +235,13 @@ def run_stack_preflight(db: Session) -> StackReadinessReport:
         )
         return _last_report
 
-    expected_hashes = {
-        "A_CORE": _sha256(PROJECT_ROOT / "backend/models/MODEL_A_FINAL.joblib"),
-        "MODEL_B": _sha256(PROJECT_ROOT / "backend/config/model_b.json"),
-        "MODEL_C": _sha256(PROJECT_ROOT / "backend/models/MODEL_C_V3_FROZEN.joblib"),
-        "DECISION_ENGINE": _sha256(PROJECT_ROOT / "backend/config/decision_engine.json"),
+    artifact_paths = {
+        "A_CORE": PROJECT_ROOT / "backend/models/MODEL_A_FINAL.joblib",
+        "MODEL_B": PROJECT_ROOT / "backend/config/model_b.json",
+        "MODEL_C": PROJECT_ROOT / "backend/models/MODEL_C_V3_FROZEN.joblib",
+        "DECISION_ENGINE": PROJECT_ROOT / "backend/config/decision_engine.json",
     }
+    expected_hashes = {component: _sha256(path) for component, path in artifact_paths.items()}
     active_versions = {
         row.component: row
         for row in db.query(ModelVersion).filter(ModelVersion.is_active.is_(True)).all()
@@ -248,7 +250,7 @@ def run_stack_preflight(db: Session) -> StackReadinessReport:
         component
         for component, expected in expected_hashes.items()
         if component not in active_versions
-        or active_versions[component].artifact_sha256 != expected
+        or active_versions[component].artifact_sha256 not in sha256_variants(artifact_paths[component])
         or active_versions[component].version != snapshot.model_stack_version
     ]
     snapshot_mismatch = (
@@ -305,16 +307,43 @@ def _verify_declared_checksums() -> List[str]:
     checksum_file = PROJECT_ROOT / "SHA256SUMS.txt"
     if not checksum_file.is_file():
         return ["SHA256SUMS.txt"]
+    optional_artifacts = _optional_manifest_artifacts()
     mismatches: List[str] = []
     for line in checksum_file.read_text(encoding="utf-8-sig").splitlines():
         stripped = line.strip()
         if not stripped:
             continue
         expected, relative_path = stripped.split(maxsplit=1)
-        path = PROJECT_ROOT / relative_path.strip()
-        if not path.is_file() or _sha256(path) != expected.lower():
-            mismatches.append(relative_path.strip())
+        relative_path = relative_path.strip()
+        path = PROJECT_ROOT / relative_path
+        if not path.is_file():
+            # Optional artifacts are checksummed when packaged, but their absence
+            # must not block the core stack. Their service reports its own
+            # explicit degraded/unavailable readiness state later in preflight.
+            if relative_path not in optional_artifacts:
+                mismatches.append(relative_path)
+            continue
+        if not checksum_matches(path, expected):
+            mismatches.append(relative_path)
     return mismatches
+
+
+def _optional_manifest_artifacts() -> set[str]:
+    """Return artifacts explicitly marked optional by the active manifest.
+
+    Fail closed when the manifest is missing or unreadable: no checksum entry is
+    considered optional unless the packaged manifest explicitly declares it so.
+    """
+    manifest_path = PROJECT_ROOT / "backend/config/active_stack_manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError):
+        return set()
+    return {
+        item["repo_path"]
+        for item in manifest.get("artifacts", [])
+        if item.get("repo_path") and item.get("required") is False
+    }
 
 
 def _active_manifest_issue() -> Optional[str]:
@@ -334,7 +363,8 @@ def _active_manifest_issue() -> Optional[str]:
         if relative == "backend/config/active_stack_manifest.json":
             continue
         artifact = PROJECT_ROOT / relative
-        if entries.get(relative) != _sha256(artifact):
+        expected = entries.get(relative)
+        if not expected or not checksum_matches(artifact, expected):
             return f"Active stack manifest hash is missing or stale for {relative}."
     return None
 

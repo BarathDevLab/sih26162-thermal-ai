@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 
 from backend.app.services.feature_builder import FeatureBuilder, ORDERED_FEATURES
+from backend.app.services.artifact_hashing import checksum_matches
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -129,12 +130,18 @@ def feature_validation_issue(report_path: Path = REPORT_PATH) -> Optional[str]:
         return "FeatureBuilder validation report does not pass."
     if int(report.get("sample_size", 0)) < VALIDATION_SAMPLE_SIZE:
         return "FeatureBuilder validation sample is too small."
-    try:
-        current_hashes = _input_hashes()
-    except FileNotFoundError as exc:
-        return str(exc)
-    if report.get("input_sha256") != current_hashes:
-        return "FeatureBuilder validation report is stale for the current inputs."
+    report_hashes = report.get("input_sha256")
+    if not isinstance(report_hashes, dict):
+        return "FeatureBuilder validation report is missing input hashes."
+    for path in (ASSIGNED_PATH, FEATURE_PATH, SITE_PATH, CONFIG_PATH, MODEL_PATH):
+        relative = str(path.relative_to(ROOT)).replace("\\", "/")
+        expected = report_hashes.get(relative)
+        try:
+            matches = bool(expected) and checksum_matches(path, expected)
+        except FileNotFoundError as exc:
+            return str(exc)
+        if not matches:
+            return "FeatureBuilder validation report is stale for the current inputs."
     return None
 
 
