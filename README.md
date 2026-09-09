@@ -1,193 +1,514 @@
-# SIH26162: AI-Based Detection and Classification of Industrial Fires & Persistent Thermal Sources
+# SIH26162 Thermal Intelligence Platform
 
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688.svg?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL_18-PostGIS-336791.svg?logo=postgresql&logoColor=white)](https://postgis.net)
-[![React](https://img.shields.io/badge/React_19-TypeScript-61DAFB.svg?logo=react&logoColor=black)](https://react.dev)
-[![MapLibre GL](https://img.shields.io/badge/MapLibre_GL_v5-3D_Globe-3969EC.svg?logo=mapbox&logoColor=white)](https://maplibre.org)
-[![Tests](https://img.shields.io/badge/pytest-61%2F61_passing-brightgreen.svg?logo=pytest&logoColor=white)](backend/tests/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-backend-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL%20%2B%20PostGIS-runtime-336791?logo=postgresql&logoColor=white)](https://postgis.net/)
+[![React](https://img.shields.io/badge/React%2019-TypeScript-61DAFB?logo=react&logoColor=black)](https://react.dev/)
+[![MapLibre](https://img.shields.io/badge/MapLibre%20%2B%20deck.gl-geospatial-3969AC)](https://maplibre.org/)
 
-> **Real-Time Satellite Thermal Intelligence and Early-Warning Command Center** built for the Smart India Hackathon (SIH26162).  
-> Transforms raw NASA FIRMS satellite thermal anomaly triggers into stable, physical industrial sites, classifies source identity, tracks operational states, detects site-specific thermal anomalies, and provides mission-critical early warning alerts.
+An evidence-first decision-support platform for detecting, classifying, and monitoring industrial fires and persistent thermal sources from NASA FIRMS observations.
 
----
+The platform converts individual satellite detections into stable physical source sites, evaluates each site with three independent intelligence components, combines their outputs with a deterministic alert policy, and presents the result in a live/replay geospatial command center.
 
-## 🛰️ Problem Statement & Why Raw Hotspots Are Not Enough
+> This system supports analyst decision-making. It is not life-safety-grade fire confirmation, and a satellite hotspot is not automatically an industrial fire.
 
-NASA FIRMS (VIIRS / MODIS) provides near-real-time active-fire thermal detections from space. However, in an operational industrial safety environment:
-1. **A raw satellite hotspot is NOT a confirmed fire**: It can be a regular flaring flare stack, a cement rotary kiln, a blast furnace, seasonal agricultural crop burning, or a forest wildfire.
-2. **FIRMS type codes are not ground truth**: Type 2 simply designates static land anomalies, not validated industrial plants.
-3. **Absence of nearby industry on OpenStreetMap does not mean wildfire**: Forcing non-industrial labels based on map proximity causes severe false negatives.
-4. **Abnormality is site-specific**: A $50\,\text{MW}$ thermal signature might be everyday routine operation for Jamnagar Refinery, but catastrophic for a small chemical processing unit.
+![SIH26162 intelligence architecture](docs/assets/architecture.png)
 
-SIH26162 solves this through a **source-centric, 3-model independent intelligence architecture**.
+## What the platform answers
 
----
+| Stage | Operational question | Implementation | Main output |
+| --- | --- | --- | --- |
+| Source resolver | Which detections belong to the same physical source? | Frozen 750 m source definition plus incremental live assignment | Stable `site_id` or audited candidate source |
+| Model A | What kind of source is it? | XGBoost A-Core using the deployed 33-feature order; optional guarded Prithvi rescue | `INDUSTRIAL`, `NONINDUSTRIAL`, or `UNKNOWN` |
+| Model B | How is it behaving over time? | Deterministic temporal-state engine | `NEW`, `INTERMITTENT`, `PERSISTENT`, `DORMANT`, or `REACTIVATED` |
+| Model C | Is today's activity unusual for this site? | Chronological site-specific robust anomaly engine | `NORMAL`, `ELEVATED`, `ANOMALOUS`, `CRITICAL`, or `INSUFFICIENT_HISTORY` |
+| Decision engine | What action should an analyst take? | Frozen deterministic A+B+C policy | Deduplicated operational alert and reason codes |
+| Command center | How is the evidence explored? | FastAPI, PostgreSQL/PostGIS, React, MapLibre, and deck.gl | Live map, replay, alerts, timelines, evidence, and raw detections |
 
-## 🧠 The 3-Model Independent Intelligence Stack
-
-```
-   Raw VIIRS Hotspots (NOAA-20 / NOAA-21)
-                  │
-                  ▼
-      ┌───────────────────────┐
-      │  750m Source Resolver │  ──▶ Groups hotspots into persistent physical sites
-      └───────────────────────┘
-                  │
-       ┌──────────┼──────────┐
-       ▼          ▼          ▼
- ┌──────────┐ ┌──────────┐ ┌──────────┐
- │ Model A  │ │ Model B  │ │ Model C  │
- │ Identity │ │ State    │ │ Anomaly  │
- └──────────┘ └──────────┘ └──────────┘
-       │          │          │
-       └──────────┼──────────┘
-                  ▼
-     ┌────────────────────────┐
-     │ Deterministic Decision │  ──▶ Operational Alerts & Same-Day Escalation
-     │      Alert Engine      │      (10 Official Actionable Alert Types)
-     └────────────────────────┘
-                  │
-                  ▼
- ┌────────────────────────────────────┐
- │ OSIRIS-Style 3D Web Command Center │  ──▶ Live Globe, Replay Scrubber, Deep Drawer
- └────────────────────────────────────┘
+```mermaid
+flowchart LR
+    FIRMS[NASA FIRMS<br/>NOAA-20 NRT] --> INGEST[Normalize and<br/>deduplicate]
+    INGEST --> RESOLVE[750 m incremental<br/>source resolver]
+    RESOLVE --> SITE[(PostgreSQL<br/>PostGIS)]
+    WC[ESA WorldCover] --> A[Model A<br/>source identity]
+    SITE --> A
+    SITE --> B[Model B<br/>temporal state]
+    SITE --> C[Model C<br/>site anomaly]
+    HLS[HLS imagery] -. optional .-> P[Prithvi rescue]
+    P -. guarded rescue only .-> A
+    A --> DECIDE[Deterministic<br/>decision engine]
+    B --> DECIDE
+    C --> DECIDE
+    DECIDE --> API[FastAPI and SSE]
+    SITE --> API
+    API --> UI[OSIRIS-style<br/>web command center]
 ```
 
-| Component | Core Question | Underlying Engine | Output States |
-| :--- | :--- | :--- | :--- |
-| **Source Resolver** | Which detections belong to the same facility? | $750\,\text{m}$ Haversine DBSCAN (batch) + Incremental Spatial BallTree (live) | Stable `site_id` |
-| **Model A (A-Core)** | What is this physical source? | Supervised XGBoost pipeline ($33$ physical features: Thermal, Recurrence, Spatial, ESA Land-Cover) + optional guarded **IBM/NASA Prithvi-EO-2.0** visual rescue | `INDUSTRIAL`<br>`NONINDUSTRIAL`<br>`UNKNOWN` |
-| **Model B** | How is the site behaving over time? | Deterministic temporal state machine (evaluates $N_{30}, N_{90}, N_{365}$, recurrence intervals, dormancy) | `PERSISTENT`<br>`REACTIVATED`<br>`INTERMITTENT`<br>`NEW`<br>`DORMANT` |
-| **Model C (V3)** | Is the current site-day abnormal for **this specific site**? | Unsupervised site-specific time-series baseline ($>5$ active days cold-start, median/MAD statistics, 4-group calibration) | `CRITICAL`<br>`ANOMALOUS`<br>`ELEVATED`<br>`NORMAL`<br>`INSUFFICIENT_HISTORY` |
-| **Decision Engine** | What operational action is required? | Deterministic A+B+C fusion matrix with SHA-256 fingerprinting and incident escalation | 10 Operational Alert Types |
+## Runtime principles
 
----
+- A hotspot is evidence, not a confirmed incident.
+- The source resolver remains fixed at a 750 m neighborhood radius with `min_samples=3` semantics.
+- Model A uses exactly the feature order declared in `backend/config/model_a_features.json`; the deployed artifact currently expects 33 features.
+- Model B is a deterministic state engine, not a fitted ML model.
+- Model C only compares a site-day with earlier completed active days. Future observations never enter a historical baseline.
+- `UNKNOWN` and `INSUFFICIENT_HISTORY` are valid outputs and are never replaced merely to make the UI look complete.
+- A-Core responds immediately. HLS/Prithvi is optional, asynchronous evidence for uncertain A-Core results and can never veto an A-Core probability at or above `0.885`.
+- FIRMS, Earthdata, database, and model credentials stay in the backend. The browser never calls those services directly.
 
-## 📊 Completed Implementation Progress (Phases 0–6)
+## Implemented capabilities
 
-- [x] **Phase 0: Freeze Packaging & Workspace Bootstrap**: Verified model artifacts, 33-feature pipeline integrity, Prithvi-EO-2.0 foundation model weights, and generated SHA-256 manifest.
-- [x] **Phase 1: Intelligence Engines**: Implemented `source_resolver.py`, `feature_builder.py`, `model_a.py`, `model_b.py`, and `model_c.py` with 100% frozen count reproduction.
-- [x] **Phase 2: Live FIRMS Ingestion & 2026 Backfill**: NASA FIRMS Area API client with idempotent SHA-256 deduplication and historical backfill script.
-- [x] **Phase 3: Decision & Alert Engine**: 10 operational alert types, deterministic fingerprinting, same-day escalation, and frozen `decision_engine.json`.
-- [x] **Phase 4: PostgreSQL 18 / PostGIS Database**: Bootstrapped all **79,365 physical sites**, **297,348 daily activities**, **6,294 facility evidence records** (GEM, GFMR, ICAR, FSI), and **948 alerts**.
-- [x] **Phase 5: Normalized FastAPI Endpoints**: Built 18 REST endpoints and real-time Server-Sent Events (SSE) alert stream. All 61 backend tests pass.
-- [x] **Phase 6: OSIRIS 3D Web Command Center**: MapLibre GL JS v5 photorealistic 3D Earth globe with keyless ESRI World Imagery, satellite orbital tracks, 1,800+ orbiting satellites, unclustered thermal points with bold black rings and glowing semantic cores, site drawer, filter rail, and replay scrubber.
+- Frozen Model A, B, and C runtime engines with regression coverage.
+- Incremental source resolution, candidate accumulation, ambiguity auditing, and stable-site promotion.
+- Idempotent NOAA-20 FIRMS ingestion and resumable historical backfill.
+- ESA WorldCover feature retrieval with a persistent raster cache.
+- PostgreSQL/PostGIS runtime schema, bootstrap loader, migrations, current model snapshots, and database snapshot tooling.
+- Deterministic alerts with stable fingerprints and same-day escalation.
+- FastAPI REST endpoints, live controls, scheduler telemetry, and Server-Sent Events.
+- React/TypeScript command center with a MapLibre/deck.gl globe, filters, site drawer, alert rail, and leakage-safe historical replay.
+- Four deterministic offline demo scenarios with checksummed replay caches and a walkthrough script.
+- Optional asynchronous HLS/Prithvi imagery processing.
 
----
+## Choose a setup path
 
-## 🛠️ Tech Stack
+| Path | Best for | Database source | Expected effort |
+| --- | --- | --- | --- |
+| **Fast snapshot restore** | Teammates who need the same populated database immediately | Compressed PostgreSQL dump | Minutes; recommended |
+| **Clean rebuild** | Reproducibility, a new data cutoff, or a missing snapshot | Repository bootstrap data plus FIRMS backfill | Potentially hours because WorldCover and inference must be materialized |
+| **Docker Compose** | Isolated deployment or CI-style testing | Empty PostgreSQL volume unless separately restored/bootstraped | Fast services, but data setup is still required |
 
-* **Backend & Intelligence**:
-  * Python 3.11, FastAPI, SQLAlchemy 2.0, PostgreSQL 18, PostGIS, Uvicorn
-  * XGBoost, Scikit-Learn, PyTorch, Prithvi-EO-2.0 (Foundation Model), Shapely, PyProj, PyArrow
-* **Frontend**:
-  * React 19, TypeScript, Vite, Tailwind CSS v4
-  * MapLibre GL JS v5 (3D Spherical Earth Globe), Deck.gl v9, Lucide React
-  * Zero external map API keys required (uses keyless ESRI World Imagery & Dark Canvas)
+The native Windows/PostgreSQL setup is the primary development path. Docker is optional.
 
----
+## Prerequisites
 
-## 🚀 Quick Start Guide (Running Locally)
+Install the following before continuing:
 
-### 1. Prerequisites
-* **Python 3.11+** installed
-* **Node.js 20+** installed
-* **PostgreSQL 18** with **PostGIS** extension running locally on port 5432 (database: `sih26162`)
+| Requirement | Supported/recommended version | Check |
+| --- | --- | --- |
+| Git | Current | `git --version` |
+| Python | **3.11 exactly** for the frozen runtime | `python --version` |
+| Node.js | `20.19+` or `22.12+` | `node --version` |
+| npm | Bundled with Node.js | `npm --version` |
+| PostgreSQL | PostgreSQL with matching PostGIS installation; the current shared snapshot was produced by PostgreSQL 18.4 | `psql --version` |
+| PostGIS | Installed for the local PostgreSQL server | Check with the SQL command below |
 
-### 2. Backend Setup
-```bash
-# 1. Activate virtual environment
-.\.venv\Scripts\activate
+On Windows, the database scripts automatically search `C:\Program Files\PostgreSQL\<version>\bin` when PostgreSQL tools are not on `PATH`.
 
-# 2. Install dependencies (if not already installed)
-pip install -r backend/requirements.txt
+## 1. Clone and prepare the application
 
-# 3. Verify backend test suite (all 61 tests must pass)
-pytest backend/tests
+Run all backend commands from the repository root.
 
-# 4. Start the FastAPI backend server
+```powershell
+git clone <repository-url> sih26162-thermal-ai
+Set-Location .\sih26162-thermal-ai
+
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r .\backend\requirements.txt
+
+Copy-Item .\.env.example .\.env
+
+Set-Location .\frontend
+npm ci
+Set-Location ..
+```
+
+If PowerShell prevents virtual-environment activation, permit locally created scripts for the current terminal only:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\.venv\Scripts\Activate.ps1
+```
+
+Virtual environments are machine-specific. Do not copy `.venv` from another computer. If its launcher points to a missing Python installation, delete only that broken `.venv`, recreate it with an installed Python 3.11 interpreter, and reinstall the requirements.
+
+## 2. Configure the environment
+
+Edit the root `.env` file. At minimum, configure the database URL and FIRMS key:
+
+```dotenv
+APP_ENV=development
+DATABASE_URL=postgresql+psycopg://postgres:YOUR_PASSWORD@localhost:5432/sih26162
+FIRMS_MAP_KEY=YOUR_NASA_FIRMS_MAP_KEY
+FIRMS_PRIMARY_SOURCE=VIIRS_NOAA20_NRT
+FIRMS_SECONDARY_SOURCE=VIIRS_NOAA21_NRT
+FIRMS_BBOX=67,6,98,38
+FIRMS_POLL_MINUTES=15
+MODEL_ROOT=backend/models
+MODEL_STACK_VERSION=2026-09-04-r1
+ALLOWED_ORIGINS=http://localhost:3000
+PRITHVI_ENABLED=false
+REPLAY_ENABLED=true
+REPLAY_CACHE_ENABLED=true
+```
+
+Important configuration behavior:
+
+- `FIRMS_MAP_KEY` is required for live mode and scheduled polling. Keep it secret and never commit `.env`.
+- Leave `PRITHVI_ENABLED=false` for the normal CPU/A-Core setup. Model A-Core, Model B, Model C, live ingestion, and replay continue to work without Prithvi.
+- Enabling Prithvi additionally requires its foundation weights, trained image head/config, Earthdata access, and preferably a CUDA-capable environment.
+- If the password contains URL-reserved characters such as `@`, `:`, `/`, or `#`, URL-encode it in `DATABASE_URL`.
+
+## 3A. Fast database setup from the shared snapshot
+
+This is the recommended teammate setup. A restored PostgreSQL database is not a `.db` file inside the repository: PostgreSQL stores it in its own managed server data directory. The portable artifact is the custom-format dump plus its checksum and metadata.
+
+The current workspace snapshot contains:
+
+| Property | Value |
+| --- | ---: |
+| Database | `sih26162` |
+| Data through | `2026-09-08` |
+| Source sites | 118,779 |
+| FIRMS detections | 1,580,275 |
+| Uncompressed database size | approximately 2.82 GiB |
+| Compressed dump size | approximately 250.6 MiB |
+| PostgreSQL version used to export | 18.4 |
+
+The snapshot files are intentionally not committed to Git. Share `data/database_snapshots.zip` through an appropriate large-file channel, then extract it into the repository's `data` directory:
+
+```powershell
+Expand-Archive `
+  -LiteralPath .\data\database_snapshots.zip `
+  -DestinationPath .\data
+```
+
+The resulting files should be:
+
+```text
+data/database_snapshots/
+|-- sih26162_runtime_2026-09-08.dump
+|-- sih26162_runtime_2026-09-08.dump.sha256
+`-- sih26162_runtime_2026-09-08.dump.json
+```
+
+Restore into a new local database. The script securely prompts for the PostgreSQL password when `POSTGRES_PASSWORD` is not set:
+
+```powershell
+.\backend\scripts\restore_runtime_database.ps1 `
+  -DumpPath .\data\database_snapshots\sih26162_runtime_2026-09-08.dump `
+  -Database sih26162 `
+  -Username postgres `
+  -Jobs 4
+```
+
+The restore script:
+
+1. verifies the SHA-256 sidecar;
+2. creates the target database;
+3. restores with parallel workers and without source ownership/ACLs;
+4. verifies site count, detection count, latest activity date, and PostGIS.
+
+If `sih26162` already exists, the safe choices are:
+
+- restore under another name, for example `-Database sih26162_restored`, and update `DATABASE_URL`; or
+- use `-Replace` only when you intentionally want the script to drop and replace the existing database.
+
+> `-Replace` is destructive for the named target database. It does not affect other PostgreSQL databases.
+
+Verify the restored database directly:
+
+```powershell
+psql -U postgres -d sih26162 -c "SELECT PostGIS_Version();"
+psql -U postgres -d sih26162 -c "SELECT count(*) AS sites FROM source_sites;"
+psql -U postgres -d sih26162 -c "SELECT count(*) AS detections FROM firms_detections;"
+psql -U postgres -d sih26162 -c "SELECT max(acq_date) AS data_through FROM site_daily_activity;"
+```
+
+## 3B. Clean database rebuild from repository data
+
+Use this path when a compatible snapshot is unavailable or when you need to backfill through a newer date. It creates the database, initializes ORM tables, applies the idempotent PostGIS migration, loads the authoritative 2025 bootstrap data, resumes the NOAA-20 backfill, materializes A/B/C, verifies readiness, and writes the alert-burden audit.
+
+```powershell
+.\backend\scripts\setup_local_runtime.ps1 `
+  -Database sih26162 `
+  -Username postgres `
+  -DataThrough 2026-09-08 `
+  -PythonExe .\.venv\Scripts\python.exe
+```
+
+The script prompts for the PostgreSQL password and FIRMS key if they are not already available as `POSTGRES_PASSWORD` and `FIRMS_MAP_KEY`.
+
+If a rebuild or WorldCover download is interrupted, continue the same database and cached work instead of starting over:
+
+```powershell
+.\backend\scripts\setup_local_runtime.ps1 `
+  -Database sih26162 `
+  -Username postgres `
+  -DataThrough 2026-09-08 `
+  -PythonExe .\.venv\Scripts\python.exe `
+  -Resume
+```
+
+Use a current `-DataThrough YYYY-MM-DD` value before enabling live mode. Use `-Replace` only when intentionally discarding and rebuilding the named database.
+
+### What each database asset is for
+
+```mermaid
+flowchart TD
+    BOOT[data/bootstrap<br/>tracked frozen inputs] --> LOADER[bootstrap_db.py]
+    MIG[backend/migrations<br/>schema evolution] --> DB[(Local PostgreSQL<br/>PostGIS runtime)]
+    LOADER --> DB
+    FIRMS[NASA FIRMS backfill<br/>and live polling] --> DB
+    DB --> DUMP[pg_dump snapshot<br/>fast teammate transfer]
+    DUMP --> RESTORE[restore script]
+    RESTORE --> TEAM[(Teammate's local<br/>PostgreSQL runtime)]
+    CACHE[data/cache<br/>WorldCover, HLS, replay] -. reusable downloads .-> LOADER
+```
+
+| Location | Purpose |
+| --- | --- |
+| `data/bootstrap/` | Frozen source sites, 2025 detections/features, daily history, and regression inputs used to build a database from scratch |
+| `backend/migrations/` | Idempotent schema changes; migrations define structure but do not contain the large operational dataset |
+| PostgreSQL server data directory | The active database's physical storage, managed exclusively by PostgreSQL; never copy or edit its internal files manually |
+| `data/database_snapshots/` | Portable `pg_dump` exports for fast transfer and restore |
+| `data/cache/` | Reusable downloaded/derived WorldCover, HLS, and replay caches; not the authoritative relational database |
+| `data/demo/replay/` | Small, tracked, checksummed offline demonstration snapshots |
+
+## 4. Start the application
+
+Open two terminals at the repository root.
+
+Terminal 1 - backend:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
 python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
-* Backend Health Check: [http://127.0.0.1:8000/api/v1/health](http://127.0.0.1:8000/api/v1/health)
-* Interactive Swagger API Docs: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
 
-### 3. Frontend Setup
-```bash
-# Open a new terminal in the frontend directory
-cd frontend
+Terminal 2 - frontend:
 
-# Install packages
-npm install
-
-# Start Vite development server
+```powershell
+Set-Location .\frontend
 npm run dev
 ```
-* Open your browser and navigate to: **[http://localhost:3000](http://localhost:3000)**
 
----
+Open:
 
-## 🧭 Operational Features & User Guide
+- Command center: [http://localhost:3000](http://localhost:3000)
+- Backend health: [http://127.0.0.1:8000/api/v1/health](http://127.0.0.1:8000/api/v1/health)
+- Swagger API explorer: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+- ReDoc: [http://127.0.0.1:8000/redoc](http://127.0.0.1:8000/redoc)
 
-### 1. Interactive 3D Satellite Earth Globe
-* **Photorealistic Globe**: Earth in space with real-world polar satellite orbital tracks (NOAA-20, NOAA-21, Suomi-NPP, Sentinel-2, Landsat-9) and 1,800+ LEO constellation satellites.
-* **Thermal Markers**: Hotspots styled matching the OSIRIS aesthetic — bold black outer rings (`#000000`) with glowing semantic cores:
-  * 🟡 **Amber**: Industrial facilities (Refineries, steel plants, power stations)
-  * 🟢 **Green**: Non-industrial combustion (Crop stubble, forest wildfires)
-  * 🟣 **Indigo**: Unknown / analyst review required
-  * 🔴 **Red Pulse**: Thermal escalation / critical anomalies
+On backend startup, the application validates model/config checksums, required database tables and columns, the active model versions, the common A/B/C snapshot, data freshness, and FIRMS credentials. The scheduler starts only after that preflight permits live operation.
 
-### 2. Site Intelligence Drawer
-* Click any cluster or hotspot marker to slide out the detailed site intelligence drawer.
-* Inspect Model A classification confidence, Model B temporal state, Model C baseline FRP distribution, SVG thermal timeline, and corroborating external registries (Global Energy Monitor, World Bank GFMR).
+## 5. Verify the installation
 
-### 3. Historical Replay Scrubber
-* Toggle into **REPLAY Mode** from the top header.
-* Slide the chronological timeline across 2025–2026. The backend reconstructs the exact state of every site as of that date with **strictly zero future data leakage**.
+Run the backend and frontend checks before handing off a setup:
 
-### 4. Live Streaming Alert Rail
-* Real-time alerts stream via Server-Sent Events (`/api/v1/stream/alerts`).
-* Click **LOCATE** on any alert to fly the camera directly to the facility. Analysts can triage and acknowledge alerts directly from the UI.
+```powershell
+# Backend regression suite
+.\.venv\Scripts\python.exe -m pytest .\backend\tests
 
----
+# Runtime artifact and database readiness
+.\.venv\Scripts\python.exe .\backend\scripts\verify_bootstrap_artifacts.py
 
-## 📜 Non-Negotiable Core Scientific Rules
+# Offline demo bundle integrity
+.\.venv\Scripts\python.exe .\backend\scripts\build_demo_cache.py --verify-only
 
-1. **750m Physical Resolver**: Never widen the cluster radius to 1,000m. 1,000m introduces spatial chaining and merges distinct industrial plants into artificial mega-clusters.
-2. **Never Force `UNKNOWN` to `NONINDUSTRIAL`**: If evidence is inconclusive, preserving `UNKNOWN` is an operational requirement, not a defect.
-3. **`INSUFFICIENT_HISTORY` is Not `NORMAL`**: If a site has $<5$ prior active days, Model C will not claim it is operating normally.
-4. **Model B is a Deterministic State Engine**: It is not a black-box ML model; it evaluates physical temporal physics.
-5. **No Live FIRMS or Earthdata Calls from the Browser**: All API credentials, rate limits, and caching remain strictly server-side.
-
----
-
-## 📁 Repository Structure
-
+# Frontend static checks and production build
+Set-Location .\frontend
+npm run lint
+npm run build
+Set-Location ..
 ```
+
+With both services running, inspect runtime state:
+
+```powershell
+curl.exe http://127.0.0.1:8000/api/v1/health
+curl.exe http://127.0.0.1:8000/api/v1/stats
+curl.exe http://127.0.0.1:8000/api/v1/live/status
+curl.exe http://127.0.0.1:8000/api/v1/demo/status
+```
+
+A healthy live stack reports `READY`, or `DEGRADED_PRITHVI_UNAVAILABLE` when the optional Prithvi branch is enabled but unavailable. Both statuses allow the core live pipeline to run.
+
+## Live ingestion and scheduling
+
+When readiness passes, backend startup automatically enables:
+
+- NOAA-20 NRT polling at `FIRMS_POLL_MINUTES` (15 minutes by default);
+- incremental source assignment and touched-site A/B/C refresh;
+- daily global Model B recalculation at 00:05 UTC;
+- the asynchronous Prithvi queue when configured; and
+- SSE alert delivery to the frontend.
+
+Trigger one immediate live poll from Swagger or PowerShell:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -Uri http://127.0.0.1:8000/api/v1/live/trigger-poll
+```
+
+Synthetic hotspot injection is disabled by default. It is available only when `ALLOW_SIMULATION=true`, and it must remain a clearly identified demonstration feature.
+
+## Historical replay and offline demo
+
+Replay mode reconstructs Model B at the selected cutoff and uses chronological Model C outputs without leaking current state backward in time. The repository also contains four network-independent judging scenarios:
+
+- industrial critical anomaly;
+- industrial reactivation after dormancy;
+- unknown critical analyst review; and
+- nonindustrial anomaly contrast.
+
+Verify the cached bundle and print the walkthrough:
+
+```powershell
+.\.venv\Scripts\python.exe .\backend\scripts\build_demo_cache.py --verify-only
+.\.venv\Scripts\python.exe .\backend\scripts\demo_walkthrough.py
+```
+
+The corresponding APIs are:
+
+```text
+GET /api/v1/demo/status
+GET /api/v1/demo/scenarios
+GET /api/v1/demo/scenarios/{scenario_id}/snapshot?date=YYYY-MM-DD
+GET /api/v1/replay?date=YYYY-MM-DD
+```
+
+## Share an updated database with teammates
+
+Exporting produces three files: a compressed PostgreSQL dump, SHA-256 checksum, and JSON metadata record.
+
+```powershell
+.\backend\scripts\export_runtime_database.ps1 `
+  -Database sih26162 `
+  -Username postgres
+```
+
+The script prints the exact output paths under `data/database_snapshots/`. Share all three files together. For a single transfer artifact, package the directory after export:
+
+```powershell
+$snapshotArchive = ".\data\database_snapshots_$(Get-Date -Format 'yyyyMMdd_HHmmss').zip"
+Compress-Archive `
+  -Path .\data\database_snapshots `
+  -DestinationPath $snapshotArchive `
+  -CompressionLevel Optimal
+```
+
+Database dumps are large runtime artifacts and should be distributed outside ordinary Git history. Recipients restore them with `backend/scripts/restore_runtime_database.ps1` as described above.
+
+## Docker Compose (optional)
+
+Docker Compose starts PostGIS, the FastAPI container, and the production frontend:
+
+```powershell
+Copy-Item .\.env.example .\.env
+docker compose up --build
+```
+
+This creates a persistent Docker volume named `postgis_data`, but a newly created volume does not automatically contain the populated runtime database. Restore a snapshot or run the bootstrap/backfill workflow before expecting live data. Keep secrets in `.env`; do not place them in `docker-compose.yml` or frontend source.
+
+## Troubleshooting
+
+### The frontend says live mode is blocked
+
+Check `GET /api/v1/health`. The backend intentionally fails closed:
+
+| Health status | Meaning | Resolution |
+| --- | --- | --- |
+| `DATABASE_NOT_READY` | Database connection, required tables, or required columns are missing | Confirm `DATABASE_URL`; restore a snapshot or run the setup/migration workflow |
+| `STALE_BACKFILL` | No common A/B/C snapshot exists through the operational date | Resume `setup_local_runtime.ps1` with a current `-DataThrough` date |
+| `MODEL_ARTIFACT_MISMATCH` | A required file, manifest entry, checksum, active model version, or feature contract disagrees | Restore the repository artifacts; do not retrain or edit frozen thresholds |
+| `FIRMS_CREDENTIALS_MISSING` | `FIRMS_MAP_KEY` is empty | Add the backend-only key to `.env` and restart the API |
+| `DEGRADED_PRITHVI_UNAVAILABLE` | Optional Prithvi evidence could not start | Core live mode remains available; fix Prithvi only if imagery rescue is needed |
+
+### Python reports "No Python at ..."
+
+The `.venv` launcher references a Python installation that no longer exists. Recreate the virtual environment with Python 3.11 and reinstall `backend/requirements.txt`. Do not point the project at pgAdmin's bundled Python.
+
+### PostgreSQL tools are not found
+
+Add the PostgreSQL `bin` directory to `PATH`, or confirm PostgreSQL is installed under `C:\Program Files\PostgreSQL\<version>`. The provided PowerShell scripts search that location automatically.
+
+### PostGIS or PROJ reports mixed-installation warnings
+
+Keep PostgreSQL/PostGIS tools and the Python GIS stack isolated. Do not set a global `PROJ_LIB`/`PROJ_DATA` to PostgreSQL's PostGIS `proj.db` while running Rasterio from the virtual environment. Restart the terminal after correcting those variables.
+
+### Rasterio logs `boto3 not available, falling back to a DummySession`
+
+This is informational when accessing public HTTP/COG resources without an AWS-authenticated session. It is not a failed WorldCover download by itself.
+
+### A WorldCover TIFF tile has a read error
+
+An interrupted download can leave a truncated cached tile. Stop the worker, remove only the exact corrupt tile named in the error, and resume the setup/backfill so that tile is downloaded again. Never delete the whole cache unless a complete redownload is intended.
+
+### The database is not visible as a file in the repository
+
+That is expected. PostgreSQL owns the active database inside its configured server data directory. Use `pg_dump`, `export_runtime_database.ps1`, and `restore_runtime_database.ps1`; never copy PostgreSQL's internal `base/` files between machines.
+
+## Repository map
+
+```text
 sih26162-thermal-ai/
-├── DESIGN.md                     # OSIRIS-style Dark Lacquer UI Specification
-├── README.md                     # This comprehensive documentation
-├── manifest.json                 # Model and data artifact SHA-256 manifest
-├── backend/
-│   ├── app/
-│   │   ├── api/v1/               # FastAPI REST and SSE stream endpoints
-│   │   ├── db/                   # SQLAlchemy PostGIS ORM models and session
-│   │   ├── engines/              # Frozen Model A, B, C, Resolver & Decision Engines
-│   │   ├── schemas/              # Pydantic validation contracts
-│   │   └── services/             # NASA FIRMS client, ingestion, and backfill
-│   ├── config/                   # Frozen thresholds, features, and decision matrices
-│   ├── models/                   # Joblib pipelines, Prithvi-EO weights, and configs
-│   ├── scripts/                  # High-speed database bootstrap loader
-│   └── tests/                    # 61 comprehensive unit and regression tests
-├── frontend/
-│   ├── src/
-│   │   ├── components/           # Globe MapContainer, Header, Drawer, Rail, Filters
-│   │   ├── services/             # API client and Satellite Orbit propagator
-│   │   └── types/                # Synchronized TypeScript API contracts
-│   └── package.json
-└── docs/                         # Authoritative validated research specifications
+|-- backend/
+|   |-- app/
+|   |   |-- api/v1/            FastAPI routes, live controls, replay, and SSE
+|   |   |-- db/                SQLAlchemy models and database sessions
+|   |   |-- engines/           Source resolver and frozen A/B/C/decision engines
+|   |   `-- services/          FIRMS, WorldCover, HLS, scheduler, replay, and queues
+|   |-- config/                Machine-readable frozen thresholds and contracts
+|   |-- migrations/            Idempotent PostgreSQL/PostGIS schema migration
+|   |-- models/                Serialized A-Core, Prithvi head, Model C, and optional weights
+|   |-- scripts/               Bootstrap, backfill, readiness, demo, and snapshot utilities
+|   `-- tests/                 Unit, integration, and frozen regression tests
+|-- data/
+|   |-- bootstrap/             Tracked authoritative bootstrap inputs
+|   |-- cache/                 Downloaded/derived caches (gitignored)
+|   |-- database_snapshots/    Portable PostgreSQL dumps (gitignored)
+|   |-- demo/replay/           Tracked offline demo cache
+|   `-- evidence/              Facility and contextual evidence inputs
+|-- docs/                      Research decisions and implementation contracts
+|-- frontend/                  React 19, TypeScript, Vite, MapLibre, and deck.gl
+|-- .env.example               Safe environment template
+|-- docker-compose.yml         Optional container deployment
+|-- manifest.json              Packaged artifact inventory
+`-- SHA256SUMS.txt              Frozen artifact checksums
 ```
 
----
+## Key API routes
 
-## 🏆 Project Team & Credits
-Developed for **Smart India Hackathon (SIH26162)**: *AI-Based Detection and Classification of Industrial Fires and Persistent Thermal Sources*.
+| Route | Purpose |
+| --- | --- |
+| `GET /api/v1/health` | Readiness, database, PostGIS, and active model versions |
+| `GET /api/v1/stats` | National runtime totals and A/B/C distributions |
+| `GET /api/v1/sites` | Viewport-filtered site GeoJSON |
+| `GET /api/v1/sites/{site_id}` | Full site intelligence summary |
+| `GET /api/v1/sites/{site_id}/timeline` | Daily thermal and model timeline |
+| `GET /api/v1/sites/{site_id}/detections` | Raw normalized FIRMS observations |
+| `GET /api/v1/sites/{site_id}/evidence` | Facility and contextual evidence |
+| `GET /api/v1/sites/{site_id}/imagery` | Cached HLS/Prithvi evidence status |
+| `GET /api/v1/alerts` | Operational alert feed |
+| `POST /api/v1/alerts/{alert_id}/ack` | Analyst acknowledgement |
+| `GET /api/v1/replay` | Leakage-safe historical reconstruction |
+| `GET /api/v1/stream/alerts` | Live SSE alert stream |
+| `GET /api/v1/live/status` | Scheduler and queue telemetry |
+| `POST /api/v1/live/trigger-poll` | On-demand FIRMS polling cycle |
+
+## Scientific and implementation documentation
+
+The runtime is governed by the frozen configuration files under `backend/config/`. The research documents explain the decisions and validation boundaries:
+
+- [System overview](docs/00_overview.md)
+- [Data and ground truth](docs/01_data_and_ground_truth.md)
+- [Model A](docs/02_model_a.md)
+- [Model B](docs/03_model_b.md)
+- [Model C](docs/04_model_c.md)
+- [Validation claims](docs/05_validation_claims.md)
+- [Decision engine](docs/06_decision_engine.md)
+- [FIRMS and imagery integration](docs/07_firms_integration.md)
+- [Backend and database](docs/08_backend_and_db.md)
+- [Frontend](docs/09_frontend.md)
+- [Deployment and operations](docs/10_deployment_ops.md)
+- [Testing roadmap](docs/11_testing_roadmap.md)
+- [Artifact and environment contract](docs/13_artifacts_env_contract.md)
+
+Where archived prose differs from the packaged runtime, use the checked-in machine-readable config and active artifact manifest. Do not silently retrain models or redesign frozen logic.
+
+## License and attribution
+
+Developed for Smart India Hackathon problem statement SIH26162, *AI-Based Detection and Classification of Industrial Fires and Persistent Thermal Sources*.
+
+Retain applicable attribution and licensing for NASA FIRMS, ESA WorldCover, HLS/Earthdata, IBM/NASA Prithvi-EO, OpenStreetMap, and external facility/evidence datasets when redistributing data or model artifacts.
