@@ -43,6 +43,7 @@ wheels/
 
 data/cache/
 data/backfill_2026/*.log
+data/backfill_2026/alert_burden_audit.json
 
 *.pt
 *.pth

@@ -10,15 +10,53 @@ from collections import Counter
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import func
+from sqlalchemy import func, or_, select
 
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from backend.app.db.models import Alert, SiteModelA, StackSnapshot
+from backend.app.db.models import Alert, SiteModelAHistory, StackSnapshot
 from backend.app.db.session import SessionLocal
+
+
+INDUSTRIAL_ALERT_TYPES = (
+    "CRITICAL_INDUSTRIAL_ANOMALY",
+    "HIGH_INDUSTRIAL_ANOMALY",
+    "INDUSTRIAL_REACTIVATION_ANOMALY",
+    "INDUSTRIAL_ELEVATION",
+    "NORMAL_INDUSTRIAL_OPERATION",
+)
+
+
+def count_industrial_claim_violations(db, start: date, target: date) -> int:
+    """Audit each alert against Model A state available on that alert's date."""
+    effective_a_class = (
+        select(SiteModelAHistory.class_name)
+        .where(
+            SiteModelAHistory.site_id == Alert.site_id,
+            SiteModelAHistory.feature_as_of_detection_date <= Alert.site_day,
+        )
+        .order_by(
+            SiteModelAHistory.feature_as_of_detection_date.desc(),
+            SiteModelAHistory.computed_at.desc(),
+        )
+        .limit(1)
+        .correlate(Alert)
+        .scalar_subquery()
+    )
+    return int(
+        db.query(func.count(Alert.alert_id))
+        .filter(
+            Alert.site_day >= start,
+            Alert.site_day <= target,
+            Alert.alert_type.in_(INDUSTRIAL_ALERT_TYPES),
+            or_(effective_a_class.is_(None), effective_a_class != "INDUSTRIAL"),
+        )
+        .scalar()
+        or 0
+    )
 
 
 def main() -> int:
@@ -54,22 +92,8 @@ def main() -> int:
             count for level, count in by_level.items() if level in {"HIGH", "CRITICAL"}
         )
 
-        industrial_claim_violations = (
-            db.query(func.count(Alert.alert_id))
-            .join(SiteModelA, SiteModelA.site_id == Alert.site_id)
-            .filter(
-                Alert.site_day >= start,
-                Alert.site_day <= target,
-                Alert.alert_type.in_((
-                    "CRITICAL_INDUSTRIAL_ANOMALY",
-                    "HIGH_INDUSTRIAL_ANOMALY",
-                    "INDUSTRIAL_REACTIVATION_ANOMALY",
-                    "INDUSTRIAL_ELEVATION",
-                    "NORMAL_INDUSTRIAL_OPERATION",
-                )),
-                SiteModelA.class_name != "INDUSTRIAL",
-            )
-            .scalar()
+        industrial_claim_violations = count_industrial_claim_violations(
+            db, start, target
         )
 
         result = {
