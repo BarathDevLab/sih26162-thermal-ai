@@ -49,10 +49,10 @@ async def lifespan(app: FastAPI):
             app.state.stack_readiness = readiness.to_dict()
             logger.info("Runtime readiness: %s (%s)", readiness.status, readiness.detail)
             if readiness.can_start_live:
-                from backend.app.services.live_pipeline import get_live_pipeline_service
-
-                get_live_pipeline_service().ensure_resolver_loaded(db)
-                logger.info("Prepared the stable source-member spatial index.")
+                logger.info(
+                    "Stable source-member spatial index will load lazily on the first "
+                    "FIRMS ingestion batch."
+                )
         finally:
             db.close()
     else:

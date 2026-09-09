@@ -1,27 +1,18 @@
-import os
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+"""Compatibility entry point for running ``uvicorn main:app`` from backend/.
 
-app = FastAPI(
-    title="SIH26162 Thermal Intelligence API",
-    version="1.0.0",
-)
+The canonical application lives in :mod:`backend.app.main`. Keeping this shim
+prevents local development commands from accidentally starting a reduced API.
+"""
 
-cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=cors_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+from pathlib import Path
+import sys
 
 
-@app.get("/api/v1/health")
-def health():
-    return {
-        "status": "ok",
-        "service": "sih26162-backend",
-        "env": os.getenv("APP_ENV", "development"),
-        "model_stack_version": os.getenv("MODEL_STACK_VERSION", "2026-09-04-r1"),
-    }
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from backend.app.main import app  # noqa: E402,F401
+
+
+__all__ = ["app"]
