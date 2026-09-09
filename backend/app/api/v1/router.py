@@ -13,6 +13,7 @@ from backend.app.api.v1.layers import router as layers_router
 from backend.app.api.v1.replay import router as replay_router
 from backend.app.api.v1.stream import router as stream_router
 from backend.app.api.v1.live import router as live_router
+from backend.app.api.v1.demo import router as demo_router
 
 api_v1_router = APIRouter()
 
@@ -25,3 +26,4 @@ api_v1_router.include_router(layers_router, tags=["Map Layers"])
 api_v1_router.include_router(replay_router, tags=["Historical Replay"])
 api_v1_router.include_router(stream_router, tags=["Live Alert Stream"])
 api_v1_router.include_router(live_router, tags=["Live Ingestion & Simulation"])
+api_v1_router.include_router(demo_router, tags=["Offline Demo"])

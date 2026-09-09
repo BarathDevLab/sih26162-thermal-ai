@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Header } from './components/Header';
 import { SidebarFilters } from './components/SidebarFilters';
 import { MapContainer } from './components/MapContainer';
@@ -51,6 +51,9 @@ export default function App() {
 
   const [currentBBox, setCurrentBBox] = useState<[number, number, number, number] | undefined>(undefined);
   const [sitesData, setSitesData] = useState<SiteGeoJSONFeatureCollection | null>(null);
+  const [sitesLoading, setSitesLoading] = useState<boolean>(false);
+  const [sitesError, setSitesError] = useState<string | null>(null);
+  const sitesRequestId = useRef(0);
   const [selectedSiteId, setSelectedSiteId] = useState<string | null>(null);
   const [selectedSite, setSelectedSite] = useState<SiteDetail | null>(null);
 
@@ -109,20 +112,30 @@ export default function App() {
 
   // 3. Load Sites based on BBox and Operating Mode
   const loadSites = useCallback(async () => {
+    const requestId = ++sitesRequestId.current;
+    setSitesLoading(true);
+    setSitesError(null);
     try {
       if (mode === 'LIVE') {
         const data = await fetchSitesInBBox(currentBBox, { limit: 3000 });
-        setSitesData(data);
+        if (requestId === sitesRequestId.current) setSitesData(data);
       } else {
         const replayData = await fetchReplaySnapshot(replayDate, currentBBox, 3000);
-        setSitesData({
-          type: 'FeatureCollection',
-          features: replayData.features,
-          total_count: replayData.active_sites_count
-        });
+        if (requestId === sitesRequestId.current) {
+          setSitesData({
+            type: 'FeatureCollection',
+            features: replayData.features,
+            total_count: replayData.active_sites_count
+          });
+        }
       }
     } catch (err) {
       console.error('Error fetching sites:', err);
+      if (requestId === sitesRequestId.current) {
+        setSitesError(err instanceof Error ? err.message : 'Unable to load sites');
+      }
+    } finally {
+      if (requestId === sitesRequestId.current) setSitesLoading(false);
     }
   }, [currentBBox, mode, replayDate]);
 
@@ -223,6 +236,8 @@ export default function App() {
               endDate={stats?.latest_firms_date || undefined}
               onDateChange={setReplayDate}
               activeCount={sitesData?.total_count || 0}
+              isLoading={sitesLoading}
+              error={sitesError}
             />
           )}
         </div>

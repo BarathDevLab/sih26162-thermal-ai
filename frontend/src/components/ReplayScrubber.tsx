@@ -5,7 +5,8 @@ import {
   RotateCcw,
   ChevronLeft,
   ChevronRight,
-  Calendar
+  Calendar,
+  Loader2
 } from 'lucide-react';
 
 interface ReplayScrubberProps {
@@ -13,13 +14,17 @@ interface ReplayScrubberProps {
   endDate?: string;
   onDateChange: (date: string) => void;
   activeCount: number;
+  isLoading?: boolean;
+  error?: string | null;
 }
 
 export const ReplayScrubber: React.FC<ReplayScrubberProps> = ({
   currentDate,
   endDate: configuredEndDate,
   onDateChange,
-  activeCount
+  activeCount,
+  isLoading = false,
+  error = null
 }) => {
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1);
@@ -31,7 +36,7 @@ export const ReplayScrubber: React.FC<ReplayScrubberProps> = ({
 
   // Playback timer effect
   useEffect(() => {
-    if (!isPlaying) return;
+    if (!isPlaying || isLoading || error) return;
 
     const interval = setInterval(() => {
       const nextTime = new Date(currentDate).getTime() + 24 * 3600 * 1000;
@@ -44,7 +49,7 @@ export const ReplayScrubber: React.FC<ReplayScrubberProps> = ({
     }, 1500 / playbackSpeed);
 
     return () => clearInterval(interval);
-  }, [isPlaying, currentDate, playbackSpeed, endDate, onDateChange]);
+  }, [isPlaying, isLoading, error, currentDate, playbackSpeed, endDate, onDateChange]);
 
   const handleSliderChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const timestamp = parseInt(e.target.value, 10);
@@ -78,8 +83,15 @@ export const ReplayScrubber: React.FC<ReplayScrubberProps> = ({
           <span className="text-amber-300 font-bold text-sm">{currentDate}</span>
           <span className="text-slate-500">&middot;</span>
           <span className="text-slate-300">{activeCount.toLocaleString()} sites</span>
+          {isLoading && <Loader2 className="w-3.5 h-3.5 text-amber-400 animate-spin" />}
         </div>
       </div>
+
+      {error && (
+        <div className="mb-2 rounded border border-red-500/30 bg-red-500/10 px-2 py-1 text-[10px] font-mono text-red-300">
+          Replay frame unavailable: {error}
+        </div>
+      )}
 
       {/* Scrubbing Slider */}
       <div className="space-y-1.5">
@@ -112,6 +124,7 @@ export const ReplayScrubber: React.FC<ReplayScrubberProps> = ({
 
           <button
             onClick={() => setIsPlaying(!isPlaying)}
+            disabled={Boolean(error)}
             className="px-3 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 font-bold text-xs border border-amber-500/40 flex items-center gap-1.5 transition-all"
           >
             {isPlaying ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />}

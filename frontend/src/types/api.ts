@@ -248,7 +248,10 @@ export interface AlertAckResponse {
 export interface ReplaySnapshotResponse {
   as_of_date: string;
   active_sites_count: number;
+  returned_sites_count: number;
+  truncated: boolean;
   alerts_count: number;
+  cache_status: 'MISS' | 'HIT' | 'DEMO_CACHE';
   features: SiteGeoJSONFeature[];
 }
 

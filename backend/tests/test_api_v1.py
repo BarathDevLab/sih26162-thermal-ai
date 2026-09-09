@@ -256,6 +256,11 @@ def test_replay_endpoint():
     assert data["as_of_date"] == cutoff
     assert "features" in data
     assert isinstance(data["features"], list)
+    assert data["returned_sites_count"] == len(data["features"])
+    assert data["active_sites_count"] >= data["returned_sites_count"]
+    assert data["truncated"] == (
+        data["active_sites_count"] > data["returned_sites_count"]
+    )
 
     for feat in data["features"]:
         props = feat["properties"]
