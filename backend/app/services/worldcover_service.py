@@ -39,12 +39,17 @@ TRANSIENT_REMOTE_ERRORS = (
     "connection reset",
     "connection timed out",
     "failed to connect",
+    "got 0 bytes",
+    "http error code: 0",
     "http response code: 429",
     "http response code: 500",
     "http response code: 502",
     "http response code: 503",
     "http response code: 504",
+    "ireadblock failed",
     "temporary failure",
+    "tifffilltile:read error",
+    "tiffreadencodedtile",
 )
 REMOTE_RETRY_DELAYS_SECONDS = (2, 5, 10)
 

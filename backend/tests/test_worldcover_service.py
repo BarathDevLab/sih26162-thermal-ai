@@ -92,3 +92,13 @@ def test_transient_worldcover_open_is_retried_then_fails_fast(monkeypatch):
         WorldCoverService._open_remote_with_retry(StubRasterio, "https://example.invalid/tile.tif")
 
     assert StubRasterio.calls == 4
+
+
+@pytest.mark.parametrize("message", [
+    "TIFFFillTile:Read error; got 0 bytes, expected 38042",
+    "TIFFReadEncodedTile() failed",
+    "band 1: IReadBlock failed at X offset 17, Y offset 27",
+    "HTTP error code: 0 - https://example.invalid/tile.tif",
+])
+def test_partial_remote_tiff_failures_are_transient(message):
+    assert WorldCoverService._is_transient_remote_error(RuntimeError(message))
