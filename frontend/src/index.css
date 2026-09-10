@@ -1,143 +1,274 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
 @import "tailwindcss";
 @import "maplibre-gl/dist/maplibre-gl.css";
 
+/* ─── Stitch Minimalist Token Map ─────────────────────────────────────
+   obsidian:   #070A0F  → body background
+   panel:      #12161F  → drawer / sidebar surface  (at 85-90% opacity)
+   card:       #0D1118  → inner section cards        (black/30)
+   accentCyan: #89E5FC  → ALL accent highlights (1 colour rule)
+   accentBlue: #6889F7  → secondary accent / chart lines
+   dimSlate:   #64748B  → muted labels
+   lightSlate: #94A3B8  → secondary text
+   hairline:   rgba(255,255,255,0.08)  → borders everywhere
+──────────────────────────────────────────────────────────────────── */
+
 @layer base {
   :root {
-    --surface-ground: #070a12;
-    --surface-panel: #0b1120;
-    --surface-card: #111a2e;
-    --surface-hover: #18243e;
-    --surface-active: #1f2f52;
-    --border-subtle: rgba(255, 255, 255, 0.08);
-    --border-contrast: rgba(255, 255, 255, 0.16);
-    --border-glow: rgba(56, 189, 248, 0.25);
+    --obsidian:       #070A0F;
+    --panel:          #12161F;
+    --card:           #0D1118;
+    --accent-cyan:    #89E5FC;
+    --accent-blue:    #6889F7;
+    --dim-slate:      #64748B;
+    --light-slate:    #94A3B8;
+    --hairline:       rgba(255, 255, 255, 0.08);
+    --hairline-hover: rgba(255, 255, 255, 0.14);
+    --hairline-cyan:  rgba(137, 229, 252, 0.25);
   }
 
   body {
     margin: 0;
     padding: 0;
-    background-color: var(--surface-ground);
-    color: #f8fafc;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background-color: var(--obsidian);
+    background-image:
+      radial-gradient(circle at 50% 20%, rgba(104, 137, 247, 0.04) 0%, transparent 60%),
+      linear-gradient(to right, rgba(255, 255, 255, 0.012) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(255, 255, 255, 0.012) 1px, transparent 1px);
+    background-size: 100% 100%, 48px 48px, 48px 48px;
+    color: #f1f5f9;
+    font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     overflow: hidden;
     user-select: none;
   }
 }
 
-/* Custom telemetry scrollbar */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-::-webkit-scrollbar-track {
-  background: #090d16;
-}
-::-webkit-scrollbar-thumb {
-  background: #1e293b;
-  border-radius: 3px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: #334155;
-}
+/* ─── Thin scrollbar ───────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: rgba(18, 22, 31, 0.5); }
+::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.12); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(137, 229, 252, 0.35); }
 
-/* MapLibre custom container */
-.maplibregl-map {
-  font-family: inherit;
+/* ─── MapLibre ─────────────────────────────────────────────────────── */
+.maplibregl-map { font-family: inherit; }
+.maplibregl-popup {
+  max-width: 380px !important;
 }
 .maplibregl-popup-content {
-  background: #0b1120 !important;
-  color: #f8fafc !important;
-  border: 1px solid rgba(255, 255, 255, 0.15) !important;
-  border-radius: 6px !important;
+  background: rgba(10, 16, 28, 0.92) !important;
+  backdrop-filter: blur(16px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(16px) saturate(180%) !important;
+  color: #f1f5f9 !important;
+  border: 1px solid rgba(56, 189, 248, 0.25) !important;
+  border-radius: 10px !important;
   padding: 10px 12px !important;
-  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.8) !important;
-}
-.maplibregl-popup-anchor-top .maplibregl-popup-tip {
-  border-bottom-color: #0b1120 !important;
-}
-.maplibregl-popup-anchor-bottom .maplibregl-popup-tip {
-  border-top-color: #0b1120 !important;
-}
-.maplibregl-popup-anchor-left .maplibregl-popup-tip {
-  border-right-color: #0b1120 !important;
-}
-.maplibregl-popup-anchor-right .maplibregl-popup-tip {
-  border-left-color: #0b1120 !important;
+  box-shadow: 0 16px 40px -6px rgba(0, 0, 0, 0.85), 0 0 20px rgba(6, 182, 212, 0.12) !important;
+  font-family: 'JetBrains Mono', monospace !important;
+  max-width: 380px !important;
+  overflow: hidden !important;
 }
 
-/* Pulsing radar keyframes */
+/* Completely suppress all default MapLibre controls (top-left zoom, attribution circle, etc.) */
+.maplibregl-ctrl-top-left,
+.maplibregl-ctrl-top-right,
+.maplibregl-ctrl-bottom-right,
+.maplibregl-ctrl-bottom-left,
+.maplibregl-ctrl-group,
+.maplibregl-ctrl-attrib,
+.maplibregl-compact {
+  display: none !important;
+}
+.maplibregl-popup-anchor-top    .maplibregl-popup-tip { border-bottom-color: rgba(10, 16, 28, 0.92) !important; }
+.maplibregl-popup-anchor-bottom .maplibregl-popup-tip { border-top-color:    rgba(10, 16, 28, 0.92) !important; }
+.maplibregl-popup-anchor-left   .maplibregl-popup-tip { border-right-color:  rgba(10, 16, 28, 0.92) !important; }
+.maplibregl-popup-anchor-right  .maplibregl-popup-tip { border-left-color:   rgba(10, 16, 28, 0.92) !important; }
+
+/* ─── Keyframe animations ──────────────────────────────────────────── */
 @keyframes ping-slow {
-  0% {
-    transform: scale(0.95);
-    opacity: 0.8;
-  }
-  70% {
-    transform: scale(1.6);
-    opacity: 0;
-  }
-  100% {
-    transform: scale(1.6);
-    opacity: 0;
-  }
+  0%   { transform: scale(0.95); opacity: 0.8; }
+  70%  { transform: scale(1.6);  opacity: 0;   }
+  100% { transform: scale(1.6);  opacity: 0;   }
 }
-
 @keyframes thermal-pulse {
-  0%, 100% {
-    opacity: 0.85;
-    transform: scale(1);
-    filter: drop-shadow(0 0 8px rgba(245, 158, 11, 0.6));
-  }
-  50% {
-    opacity: 1;
-    transform: scale(1.08);
-    filter: drop-shadow(0 0 16px rgba(239, 68, 68, 0.9));
-  }
+  0%, 100% { opacity: 0.85; transform: scale(1);    filter: drop-shadow(0 0 6px rgba(137,229,252,0.4)); }
+  50%       { opacity: 1;   transform: scale(1.06); filter: drop-shadow(0 0 14px rgba(137,229,252,0.7)); }
 }
-
-@keyframes radar-sweep {
-  0% {
-    transform: rotate(0deg);
-  }
-  100% {
-    transform: rotate(360deg);
-  }
-}
-
+@keyframes radar-sweep { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 @keyframes scanline {
-  0% {
-    transform: translateY(-100%);
-  }
-  100% {
-    transform: translateY(1000%);
-  }
+  0%   { transform: translateY(-100%); }
+  100% { transform: translateY(1000%); }
+}
+@keyframes cyan-breathe {
+  0%, 100% { opacity: 0.6; }
+  50%       { opacity: 1;   }
 }
 
-.animate-ping-slow {
-  animation: ping-slow 2.5s cubic-bezier(0, 0, 0.2, 1) infinite;
+.animate-ping-slow      { animation: ping-slow 2.5s cubic-bezier(0, 0, 0.2, 1) infinite; }
+.animate-thermal-pulse  { animation: thermal-pulse 3s ease-in-out infinite; }
+.animate-radar-sweep    { animation: radar-sweep 8s linear infinite; }
+.animate-cyan-breathe   { animation: cyan-breathe 2.4s ease-in-out infinite; }
+
+/* ─── Core glassmorphic panels (Stitch spec) ───────────────────────── */
+/* Main HUD panel: bg-[#12161F] at 84% + backdrop-blur-xl + hairline */
+.hud-glass-panel {
+  background: rgba(18, 22, 31, 0.84);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow:
+    0 20px 60px -12px rgba(0, 0, 0, 0.9),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    inset 0 0 0 1px rgba(137, 229, 252, 0.04);
 }
 
-.animate-thermal-pulse {
-  animation: thermal-pulse 3s ease-in-out infinite;
+/* Accent panel: cyan hairline, faint inner glow */
+.hud-glass-panel-accent {
+  background: rgba(18, 22, 31, 0.92);
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  border: 1px solid rgba(137, 229, 252, 0.22);
+  box-shadow:
+    0 20px 50px -10px rgba(0, 0, 0, 0.9),
+    inset 0 0 20px rgba(137, 229, 252, 0.04),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
-.animate-radar-sweep {
-  animation: radar-sweep 8s linear infinite;
-}
-
-/* Tactical Glass utilities */
-.tactical-glass {
-  background: rgba(7, 10, 18, 0.85);
+/* Pill / capsule HUD elements */
+.hud-glass-pill {
+  background: rgba(18, 22, 31, 0.72);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
-.tactical-glass-accent {
-  background: rgba(11, 17, 32, 0.9);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(56, 189, 248, 0.3);
-  box-shadow: 0 0 20px rgba(6, 182, 212, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+/* Inner section cards (darker, no blur needed inside a blurred parent) */
+.hud-card {
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  transition: border-color 0.2s ease;
+}
+.hud-card:hover {
+  border-color: rgba(255, 255, 255, 0.13);
+}
+
+/* ─── Header bar ───────────────────────────────────────────────────── */
+.hud-header {
+  background: rgba(7, 10, 15, 0.92);
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+/* ─── Status chip helpers ──────────────────────────────────────────── */
+/* Neutral chip: used for class/state labels */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: rgba(255, 255, 255, 0.06);
+  color: #94A3B8;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+/* Cyan accent chip — active states, primary values */
+.chip-cyan {
+  background: rgba(137, 229, 252, 0.10);
+  color: #89E5FC;
+  border-color: rgba(137, 229, 252, 0.25);
+}
+/* Critical alert chip — ONLY for genuine alerts */
+.chip-alert {
+  background: rgba(244, 63, 94, 0.12);
+  color: #fda4af;
+  border-color: rgba(244, 63, 94, 0.30);
+}
+
+/* ─── Tactical Inspector Floating Glass Card ─── */
+.drawer-glass {
+  background: rgba(10, 16, 28, 0.82);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  border-radius: 18px;
+  box-shadow:
+    0 24px 60px -8px rgba(0, 0, 0, 0.75),
+    0 0 35px rgba(6, 182, 212, 0.10),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    inset 0 0 20px rgba(137, 229, 252, 0.03);
+}
+
+/* ─── Hide scrollbar but allow scrolling ──────────────────────────── */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+input[type="range"].tactical-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+input[type="range"].tactical-slider::-webkit-slider-runnable-track {
+  height: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+input[type="range"].tactical-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  margin-top: -7px;
+  height: 16px;
+  width: 6px;
+  background: #89E5FC;
+  border-radius: 2px;
+  border: none;
+  box-shadow: 0 0 10px rgba(137, 229, 252, 0.8);
+  cursor: grab;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+input[type="range"].tactical-slider::-webkit-slider-thumb:active {
+  cursor: grabbing;
+  transform: scale(1.2);
+  box-shadow: 0 0 18px rgba(137, 229, 252, 1);
+}
+input[type="range"].tactical-slider::-moz-range-track {
+  height: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+input[type="range"].tactical-slider::-moz-range-thumb {
+  height: 16px;
+  width: 6px;
+  background: #89E5FC;
+  border-radius: 2px;
+  border: none;
+  box-shadow: 0 0 10px rgba(137, 229, 252, 0.8);
+  cursor: grab;
+}
+
+/* Custom slim cyber-scrollbar for HUD panels */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(56, 189, 248, 0.25);
+  border-radius: 4px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(56, 189, 248, 0.5);
+}
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(56, 189, 248, 0.25) rgba(0, 0, 0, 0.2);
 }
 

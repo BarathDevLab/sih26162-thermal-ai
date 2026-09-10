@@ -4,7 +4,7 @@ import { MapboxOverlay } from '@deck.gl/mapbox';
 import { ColumnLayer } from '@deck.gl/layers';
 import type { SiteGeoJSONFeatureCollection, FilterState, SiteGeoJSONFeature } from '../types/api';
 import { getSatelliteOrbitRings, getSatelliteConstellation, getSensorSwathPolygons } from '../services/satellites';
-import { Globe, Layers, Satellite, Flame, Radio, Zap, Sparkles } from 'lucide-react';
+import { Sparkles, Plus, Minus, Compass } from 'lucide-react';
 
 interface MapContainerProps {
   sitesData: SiteGeoJSONFeatureCollection | null;
@@ -15,6 +15,11 @@ interface MapContainerProps {
   is3D: boolean;
   focusedCoordinates?: [number, number] | null;
   isLoading: boolean;
+  basemapMode?: 'SATELLITE' | 'DARK';
+  show3DColumns?: boolean;
+  showSatellites?: boolean;
+  showSwaths?: boolean;
+  showHeatBloom?: boolean;
 }
 
 function isSiteVisible(feature: SiteGeoJSONFeature, filters: FilterState): boolean {
@@ -112,6 +117,109 @@ const DARK_TACTICAL_STYLE: maplibregl.StyleSpecification = {
   ]
 };
 
+// Dynamic basemap style builder respecting projection
+const getBasemapStyle = (mode: 'SATELLITE' | 'DARK', is3DMode: boolean): maplibregl.StyleSpecification => {
+  const base = mode === 'SATELLITE' ? SATELLITE_GLOBE_STYLE : DARK_TACTICAL_STYLE;
+  return {
+    ...base,
+    projection: {
+      type: is3DMode ? 'globe' : 'mercator'
+    }
+  };
+};
+
+// Procedurally generates authentic tactical spacecraft & satellite icon pixel data for MapLibre
+function createSatelliteCraftIcon(isPrimary: boolean): ImageData {
+  const size = isPrimary ? 36 : 22;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    return new ImageData(size, size);
+  }
+  const cx = size / 2;
+  const cy = size / 2;
+
+  ctx.clearRect(0, 0, size, size);
+
+  if (isPrimary) {
+    // 1. Outer cyan telemetry beacon glow ring
+    ctx.strokeStyle = 'rgba(56, 189, 248, 0.5)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 15, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // 2. Solar Arrays Left Wing [-14 to -5]
+    ctx.fillStyle = '#0284c7';
+    ctx.strokeStyle = '#38bdf8';
+    ctx.lineWidth = 1;
+    ctx.fillRect(cx - 14, cy - 4, 9, 8);
+    ctx.strokeRect(cx - 14, cy - 4, 9, 8);
+
+    // Solar Cell Divider Left
+    ctx.beginPath();
+    ctx.moveTo(cx - 9.5, cy - 4);
+    ctx.lineTo(cx - 9.5, cy + 4);
+    ctx.stroke();
+
+    // 3. Solar Arrays Right Wing [+5 to +14]
+    ctx.fillRect(cx + 5, cy - 4, 9, 8);
+    ctx.strokeRect(cx + 5, cy - 4, 9, 8);
+
+    // Solar Cell Divider Right
+    ctx.beginPath();
+    ctx.moveTo(cx + 9.5, cy - 4);
+    ctx.lineTo(cx + 9.5, cy + 4);
+    ctx.stroke();
+
+    // 4. Center Satellite Chassis Bus (Titanium Spacecraft Body)
+    ctx.fillStyle = '#070e1e';
+    ctx.fillRect(cx - 4, cy - 5, 8, 10);
+    ctx.strokeStyle = '#e0f2fe';
+    ctx.lineWidth = 1.3;
+    ctx.strokeRect(cx - 4, cy - 5, 8, 10);
+
+    // 5. Optical Thermal Sensor Aperture (Glowing Cyan Lens)
+    ctx.fillStyle = '#00f0ff';
+    ctx.beginPath();
+    ctx.arc(cx, cy, 2.2, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 6. Sensor Mast / Downlink Antenna
+    ctx.strokeStyle = '#38bdf8';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy + 5);
+    ctx.lineTo(cx, cy + 8.5);
+    ctx.stroke();
+  } else {
+    // Sleek Tactical Delta Spacecraft Chevron (LEO Constellation Node)
+    ctx.fillStyle = 'rgba(14, 165, 233, 0.9)';
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.2;
+
+    // Tactical Delta chevron pointing upward
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - 7);       // Apex nose
+    ctx.lineTo(cx + 6, cy + 4);   // Right wing tip
+    ctx.lineTo(cx, cy + 1.5);     // Engine notch
+    ctx.lineTo(cx - 6, cy + 4);   // Left wing tip
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Glowing telemetry pinpoint core
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(cx, cy - 1.2, 1.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  return ctx.getImageData(0, 0, size, size);
+}
+
 export const MapContainer: React.FC<MapContainerProps> = ({
   sitesData,
   selectedSiteId,
@@ -120,18 +228,18 @@ export const MapContainer: React.FC<MapContainerProps> = ({
   filters,
   is3D,
   focusedCoordinates,
-  isLoading
+  isLoading,
+  basemapMode = 'SATELLITE',
+  show3DColumns = true,
+  showSatellites = true,
+  showSwaths = true,
+  showHeatBloom = true
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const deckOverlayRef = useRef<MapboxOverlay | null>(null);
   const popupRef = useRef<Popup | null>(null);
 
-  const [basemapMode, setBasemapMode] = useState<'SATELLITE' | 'DARK'>('SATELLITE');
-  const [showSatellites, setShowSatellites] = useState<boolean>(true);
-  const [showHeatBloom, setShowHeatBloom] = useState<boolean>(true);
-  const [showSwaths, setShowSwaths] = useState<boolean>(true);
-  const [show3DColumns, setShow3DColumns] = useState<boolean>(true);
   const [viewZoom, setViewZoom] = useState<number>(is3D ? 2.5 : 4.8);
 
   const onSelectSiteRef = useRef(onSelectSite);
@@ -202,24 +310,103 @@ export const MapContainer: React.FC<MapContainerProps> = ({
       });
     }
 
-    // 2. Add Satellites Constellation Points Source & Layer
+    // Register custom spacecraft & satellite icons if not present
+    if (!map.hasImage('satellite-primary-icon')) {
+      map.addImage('satellite-primary-icon', createSatelliteCraftIcon(true));
+    }
+    if (!map.hasImage('satellite-leo-icon')) {
+      map.addImage('satellite-leo-icon', createSatelliteCraftIcon(false));
+    }
+
+    // 2. Add Satellites Constellation Points Source & Layers
     if (!map.getSource('satellites-source')) {
       map.addSource('satellites-source', {
         type: 'geojson',
-        data: getSatelliteConstellation(1800) as any
+        data: getSatelliteConstellation(260) as any
       });
     }
+
+    // 2a. Background LEO Constellation Nodes (Tactical Spacecraft Delta Chevrons)
     if (!map.getLayer('satellites-layer')) {
       map.addLayer({
         id: 'satellites-layer',
+        type: 'symbol',
+        source: 'satellites-source',
+        filter: ['!=', ['get', 'is_primary'], true],
+        layout: {
+          'icon-image': 'satellite-leo-icon',
+          'icon-size': [
+            'interpolate',
+            ['linear'],
+            ['zoom'],
+            1, 0.75,
+            4, 0.9,
+            8, 1.1
+          ],
+          'icon-allow-overlap': true,
+          'icon-ignore-placement': true
+        }
+      });
+    }
+
+    // 2b. Primary Thermal Satellite Radar Halo Ring
+    if (!map.getLayer('satellites-primary-halo')) {
+      map.addLayer({
+        id: 'satellites-primary-halo',
         type: 'circle',
         source: 'satellites-source',
+        filter: ['==', ['get', 'is_primary'], true],
         paint: {
-          'circle-color': ['get', 'color'],
-          'circle-radius': 3.5,
+          'circle-color': 'transparent',
+          'circle-radius': 16,
           'circle-stroke-width': 1.2,
-          'circle-stroke-color': '#ffffff',
-          'circle-opacity': 0.95
+          'circle-stroke-color': '#00f0ff',
+          'circle-stroke-opacity': 0.65
+        }
+      });
+    }
+
+    // 2c. Primary Thermal Satellite Core Spacecraft (Solar Arrays + Titanium Bus)
+    if (!map.getLayer('satellites-primary-core')) {
+      map.addLayer({
+        id: 'satellites-primary-core',
+        type: 'symbol',
+        source: 'satellites-source',
+        filter: ['==', ['get', 'is_primary'], true],
+        layout: {
+          'icon-image': 'satellite-primary-icon',
+          'icon-size': [
+            'interpolate',
+            ['linear'],
+            ['zoom'],
+            1, 0.85,
+            4, 1.0,
+            8, 1.25
+          ],
+          'icon-allow-overlap': true,
+          'icon-ignore-placement': true
+        }
+      });
+    }
+
+    // 2d. Primary Thermal Satellite Tactical Label (e.g. "NOAA-20 (VIIRS)")
+    if (!map.getLayer('satellites-primary-label')) {
+      map.addLayer({
+        id: 'satellites-primary-label',
+        type: 'symbol',
+        source: 'satellites-source',
+        filter: ['==', ['get', 'is_primary'], true],
+        layout: {
+          'text-field': '{name}',
+          'text-size': 9.5,
+          'text-offset': [0, 2.0],
+          'text-anchor': 'top',
+          'text-allow-overlap': true
+        },
+        paint: {
+          'text-color': '#89E5FC',
+          'text-halo-color': '#070e1e',
+          'text-halo-width': 2.0
         }
       });
     }
@@ -231,7 +418,7 @@ export const MapContainer: React.FC<MapContainerProps> = ({
         data: { type: 'FeatureCollection', features: [] },
         cluster: true,
         clusterMaxZoom: 9,
-        clusterRadius: 35
+        clusterRadius: 48
       });
     }
 
@@ -248,55 +435,55 @@ export const MapContainer: React.FC<MapContainerProps> = ({
             [
               'step',
               ['get', 'point_count'],
-              'rgba(6, 182, 212, 0.45)', // Cyan low cluster
+              'rgba(14, 165, 233, 0.35)', // Cyan low cluster
               25,
-              'rgba(245, 158, 11, 0.55)', // Amber mid cluster
+              'rgba(245, 158, 11, 0.45)', // Amber mid cluster
               100,
-              'rgba(239, 68, 68, 0.65)'   // Red high cluster
+              'rgba(239, 68, 68, 0.55)'   // Red high cluster
             ],
             [
               'match',
               ['get', 'c_status'],
-              'CRITICAL', 'rgba(239, 68, 68, 0.85)',
-              'ANOMALOUS', 'rgba(249, 115, 22, 0.75)',
-              'ELEVATED', 'rgba(234, 179, 8, 0.65)',
+              'CRITICAL', 'rgba(239, 68, 68, 0.75)',
+              'ANOMALOUS', 'rgba(249, 115, 22, 0.65)',
+              'ELEVATED', 'rgba(234, 179, 8, 0.55)',
               [
                 'match',
                 ['get', 'a_class'],
-                'INDUSTRIAL', 'rgba(245, 158, 11, 0.65)',
-                'NONINDUSTRIAL', 'rgba(16, 185, 129, 0.45)',
-                'rgba(129, 140, 248, 0.45)'
+                'INDUSTRIAL', 'rgba(245, 158, 11, 0.55)',
+                'NONINDUSTRIAL', 'rgba(16, 185, 129, 0.40)',
+                'rgba(129, 140, 248, 0.40)'
               ]
             ]
           ],
-          'circle-blur': 0.82,
+          'circle-blur': 0.85,
           'circle-radius': [
             'case',
             ['has', 'point_count'],
             [
               'step',
               ['get', 'point_count'],
-              28,
+              24,
               25,
-              42,
+              34,
               100,
-              62
+              48
             ],
             [
               'case',
-              ['==', ['get', 'site_id'], selectedSiteId || ''], 34,
-              ['==', ['get', 'c_status'], 'CRITICAL'], 28,
-              ['==', ['get', 'c_status'], 'ANOMALOUS'], 22,
-              16
+              ['==', ['get', 'site_id'], selectedSiteId || ''], 30,
+              ['==', ['get', 'c_status'], 'CRITICAL'], 24,
+              ['==', ['get', 'c_status'], 'ANOMALOUS'], 18,
+              14
             ]
           ],
           'circle-opacity': [
             'interpolate',
             ['linear'],
             ['zoom'],
-            2, 0.6,
-            6, 0.85,
-            12, 0.5
+            2, 0.5,
+            6, 0.75,
+            12, 0.45
           ]
         }
       });
@@ -315,27 +502,27 @@ export const MapContainer: React.FC<MapContainerProps> = ({
             'step',
             ['get', 'point_count'],
             21,
-            50,
-            27,
-            200,
-            36
+            25,
+            28,
+            100,
+            37
           ],
-          'circle-stroke-width': 1.6,
+          'circle-stroke-width': 1.0,
           'circle-stroke-color': [
             'step',
             ['get', 'point_count'],
             '#38bdf8',
-            50,
-            '#fbbf24',
-            200,
-            '#f87171'
+            25,
+            '#f59e0b',
+            100,
+            '#ef4444'
           ],
-          'circle-stroke-opacity': 0.85
+          'circle-stroke-opacity': 0.50
         }
       });
     }
 
-    // 3c. Main Cluster Circle Layer (Heavy Black Containment Border)
+    // 3c. Main Cluster Circle Layer (Cyber-Glass Radar Target Dial with Neon Rim)
     if (!map.getLayer('clusters')) {
       map.addLayer({
         id: 'clusters',
@@ -346,29 +533,37 @@ export const MapContainer: React.FC<MapContainerProps> = ({
           'circle-color': [
             'step',
             ['get', 'point_count'],
-            '#0891b2', // deep cyan
-            50,
-            '#d97706', // deep amber
-            200,
-            '#dc2626'  // crimson red
+            'rgba(3, 105, 161, 0.50)', // Translucent deep cyber sky
+            25,
+            'rgba(217, 119, 6, 0.60)',  // Translucent solar amber
+            100,
+            'rgba(225, 29, 72, 0.70)'   // Translucent thermal crimson
           ],
           'circle-radius': [
             'step',
             ['get', 'point_count'],
-            16,
-            50,
-            22,
-            200,
-            30
+            15,
+            25,
+            20,
+            100,
+            27
           ],
-          'circle-opacity': 0.95,
-          'circle-stroke-width': 2.5,
-          'circle-stroke-color': '#000000'
+          'circle-stroke-width': 2.0,
+          'circle-stroke-color': [
+            'step',
+            ['get', 'point_count'],
+            '#38bdf8', // Neon electric cyan
+            25,
+            '#fbbf24', // Radiant solar amber
+            100,
+            '#f87171'  // Radiant rose-crimson
+          ],
+          'circle-stroke-opacity': 0.95
         }
       });
     }
 
-    // 3d. Cluster Count Text (Monospace Bold)
+    // 3d. Cluster Count Text (Monospace Bold with Dark Tactical Halo)
     if (!map.getLayer('cluster-count')) {
       map.addLayer({
         id: 'cluster-count',
@@ -380,19 +575,21 @@ export const MapContainer: React.FC<MapContainerProps> = ({
           'text-size': 11
         },
         paint: {
-          'text-color': '#ffffff'
+          'text-color': '#ffffff',
+          'text-halo-color': 'rgba(7, 14, 30, 0.9)',
+          'text-halo-width': 1.8
         }
       });
     }
 
-    // 3e. Tactical Cluster Code Badge (TS-14 / MF-08)
+    // 3e. Tactical Cluster Code Badge (Only at Detailed Zoom)
     if (!map.getLayer('cluster-tag-labels')) {
       map.addLayer({
         id: 'cluster-tag-labels',
         type: 'symbol',
         source: 'sites-geojson',
         filter: ['has', 'point_count'],
-        minzoom: 4.5,
+        minzoom: 8.0,
         layout: {
           'text-field': ['concat', 'TS-', ['to-string', ['slice', ['to-string', ['get', 'point_count']], 0, 2]]],
           'text-size': 9.5,
@@ -441,7 +638,7 @@ export const MapContainer: React.FC<MapContainerProps> = ({
       });
     }
 
-    // 3g. Unclustered Site Points (OSIRIS Bold Black Ring + Glowing Semantic Center)
+    // 3g. Unclustered Site Points (Glowing Semantic Thermal Core)
     if (!map.getLayer('unclustered-point')) {
       map.addLayer({
         id: 'unclustered-point',
@@ -459,11 +656,11 @@ export const MapContainer: React.FC<MapContainerProps> = ({
           ],
           'circle-radius': [
             'case',
-            ['==', ['get', 'site_id'], selectedSiteId || ''], 9.5,
-            6.5
+            ['==', ['get', 'site_id'], selectedSiteId || ''], 8.5,
+            5.5
           ],
-          'circle-stroke-width': 2.5,
-          'circle-stroke-color': '#000000',
+          'circle-stroke-width': 1.4,
+          'circle-stroke-color': 'rgba(255, 255, 255, 0.85)',
           'circle-opacity': 0.95
         }
       });
@@ -532,6 +729,11 @@ export const MapContainer: React.FC<MapContainerProps> = ({
 
   const initialSetupLayersRef = useRef(setupLayers);
   const initialIs3DRef = useRef(is3D);
+  const initialBasemapRef = useRef(basemapMode);
+  const is3DRef = useRef(is3D);
+  useEffect(() => {
+    is3DRef.current = is3D;
+  }, [is3D]);
 
   // 1. Initialize MapLibre in 3D Globe Projection with Atmospheric Glow
   useEffect(() => {
@@ -540,17 +742,20 @@ export const MapContainer: React.FC<MapContainerProps> = ({
 
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
-      style: initialIs3DRef.current ? SATELLITE_GLOBE_STYLE : DARK_TACTICAL_STYLE,
+      style: getBasemapStyle(initialBasemapRef.current, initialIs3DRef.current),
       center: [78.9629, 20.5937],
       zoom: initialIs3DRef.current ? 2.5 : 4.8,
       pitch: initialIs3DRef.current ? 45 : 0,
       bearing: initialIs3DRef.current ? -12 : 0,
-      maxPitch: 85
+      maxPitch: 85,
+      attributionControl: false,
+      renderWorldCopies: initialIs3DRef.current ? true : false
     });
 
-    mapRef.current = map;
+    // Remove any lingering default MapLibre control DOM nodes
+    mapContainerRef.current.querySelectorAll('.maplibregl-ctrl-top-left, .maplibregl-ctrl-bottom-right, .maplibregl-ctrl-group, .maplibregl-ctrl-attrib').forEach(el => el.remove());
 
-    map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-left');
+    mapRef.current = map;
 
     map.on('load', () => {
       if (isCleanedUp) return;
@@ -722,7 +927,8 @@ export const MapContainer: React.FC<MapContainerProps> = ({
       const popup = new maplibregl.Popup({
         closeButton: false,
         closeOnClick: false,
-        offset: 14
+        offset: 14,
+        maxWidth: '340px'
       });
       popupRef.current = popup;
 
@@ -734,20 +940,25 @@ export const MapContainer: React.FC<MapContainerProps> = ({
           const coordinates = (e.features[0].geometry as any).coordinates.slice();
           const p = e.features[0].properties as any;
 
+          const rawId = p.site_id || 'UNKNOWN_SITE';
+          const shortId = rawId.length > 24
+            ? `${rawId.slice(0, 15)}...${rawId.slice(-5)}`
+            : rawId;
+
           const html = `
-            <div style="font-family: monospace; font-size: 11px; line-height: 1.45; min-width: 170px;">
-              <div style="display: flex; items-center; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.15); padding-bottom: 3px; margin-bottom: 4px;">
-                <span style="font-weight: bold; color: #38bdf8; letter-spacing: 0.5px;">${p.site_id}</span>
-                <span style="color: #64748b; font-size: 9px;">LOC-LOCK</span>
+            <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; line-height: 1.45; min-width: 190px; max-width: 310px;">
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid rgba(255,255,255,0.12); padding-bottom: 4px; margin-bottom: 4px;">
+                <span title="${rawId}" style="font-weight: bold; color: #38bdf8; letter-spacing: 0.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px; display: inline-block;">${shortId}</span>
+                <span style="color: #64748b; font-size: 9px; font-weight: 600; flex-shrink: 0; background: rgba(255,255,255,0.06); padding: 1px 4px; border-radius: 3px; border: 1px solid rgba(255,255,255,0.08);">LOC-LOCK</span>
               </div>
               <div style="color: #94a3b8; font-size: 9.5px;">COORD: ${coordinates[1].toFixed(4)}°N, ${coordinates[0].toFixed(4)}°E</div>
               <div style="margin-top: 5px; display: flex; flex-wrap: wrap; gap: 4px;">
-                <span style="background: rgba(245,158,11,0.25); color: #f59e0b; border: 1px solid rgba(245,158,11,0.4); padding: 1px 4px; border-radius: 3px; font-size: 9px; font-weight: bold;">${p.a_class}</span>
-                <span style="background: rgba(6,182,212,0.2); color: #06b6d4; border: 1px solid rgba(6,182,212,0.4); padding: 1px 4px; border-radius: 3px; font-size: 9px;">${p.b_state}</span>
-                <span style="background: rgba(239,68,68,0.25); color: #ef4444; border: 1px solid rgba(239,68,68,0.4); padding: 1px 4px; border-radius: 3px; font-size: 9px; font-weight: bold;">${p.c_status}</span>
+                <span style="background: rgba(245,158,11,0.18); color: #fbbf24; border: 1px solid rgba(245,158,11,0.35); padding: 1px 5px; border-radius: 4px; font-size: 9px; font-weight: 600;">${p.a_class}</span>
+                <span style="background: rgba(6,182,212,0.18); color: #38bdf8; border: 1px solid rgba(6,182,212,0.35); padding: 1px 5px; border-radius: 4px; font-size: 9px; font-weight: 600;">${p.b_state}</span>
+                <span style="background: ${p.c_status === 'CRITICAL' ? 'rgba(239,68,68,0.22)' : 'rgba(16,185,129,0.18)'}; color: ${p.c_status === 'CRITICAL' ? '#f87171' : '#34d399'}; border: 1px solid ${p.c_status === 'CRITICAL' ? 'rgba(239,68,68,0.45)' : 'rgba(16,185,129,0.35)'}; padding: 1px 5px; border-radius: 4px; font-size: 9px; font-weight: 600;">${p.c_status}</span>
               </div>
               ${p.alert_severity && p.alert_severity !== 'NONE' ? `
-                <div style="background: rgba(239,68,68,0.2); border: 1px solid rgba(239,68,68,0.5); color: #ef4444; font-weight: bold; font-size: 9px; padding: 2px 4px; border-radius: 3px; margin-top: 5px; text-align: center;">
+                <div style="background: rgba(239,68,68,0.2); border: 1px solid rgba(239,68,68,0.5); color: #fca5a5; font-weight: bold; font-size: 9px; padding: 2px 4px; border-radius: 4px; margin-top: 5px; text-align: center;">
                   ⚡ ALERT: ${p.alert_severity}
                 </div>` : ''}
             </div>
@@ -787,25 +998,53 @@ export const MapContainer: React.FC<MapContainerProps> = ({
       });
 
       // Hover on satellites
-      map.on('mouseenter', 'satellites-layer', (e) => {
-        map.getCanvas().style.cursor = 'pointer';
-        if (!e.features || !e.features[0]) return;
-        const coordinates = (e.features[0].geometry as any).coordinates.slice();
-        const p = e.features[0].properties as any;
+      const satHoverLayers = ['satellites-layer', 'satellites-primary-core', 'satellites-primary-halo'];
+      satHoverLayers.forEach(layerId => {
+        map.on('mouseenter', layerId, (e) => {
+          map.getCanvas().style.cursor = 'pointer';
+          if (!e.features || !e.features[0]) return;
+          const coordinates = (e.features[0].geometry as any).coordinates.slice();
+          const p = e.features[0].properties as any;
 
-        const satHtml = `
-          <div style="font-family: monospace; font-size: 10px; line-height: 1.35;">
-            <div style="font-weight: bold; color: #38bdf8;">${p.name}</div>
-            <div style="color: #94a3b8;">Type: ${p.type} &middot; Altitude: ${p.altitude_km} km</div>
-            ${p.sensor ? `<div style="color: #34d399; font-size: 9.5px; font-weight: bold;">Sensor: ${p.sensor}</div>` : ''}
-          </div>
-        `;
-        popup.setLngLat(coordinates).setHTML(satHtml).addTo(map);
-      });
+          const satHtml = `
+            <div style="font-family: monospace; font-size: 10px; line-height: 1.35;">
+              <div style="font-weight: bold; color: #38bdf8;">${p.name}</div>
+              <div style="color: #94a3b8;">Type: ${p.type} &middot; Altitude: ${p.altitude_km} km</div>
+              ${p.sensor ? `<div style="color: #34d399; font-size: 9.5px; font-weight: bold;">Sensor: ${p.sensor}</div>` : ''}
+            </div>
+          `;
+          popup.setLngLat(coordinates).setHTML(satHtml).addTo(map);
+        });
 
-      map.on('mouseleave', 'satellites-layer', () => {
-        map.getCanvas().style.cursor = '';
-        popup.remove();
+        map.on('mouseleave', layerId, () => {
+          map.getCanvas().style.cursor = '';
+          popup.remove();
+        });
+
+        map.on('click', layerId, (e) => {
+          if (!e.features || !e.features[0]) return;
+          const coords = (e.features[0].geometry as any).coordinates as [number, number];
+          const p = e.features[0].properties as any;
+          if (coords) {
+            map.easeTo({
+              center: coords,
+              duration: 700
+            });
+            const satPopupHtml = `
+              <div style="font-family: monospace; font-size: 11px; padding: 3px 4px; line-height: 1.4;">
+                <div style="font-weight: bold; color: #00f0ff; letter-spacing: 0.05em; display: flex; align-items: center; gap: 4px;">
+                  <span>🛰️</span>
+                  <span>${p.name}</span>
+                </div>
+                <div style="color: #94a3b8; font-size: 10px; margin-top: 2px;">
+                  TYPE: <span style="color: #ffffff; font-weight: 600;">${p.type}</span> &middot; ALTITUDE: <span style="color: #38bdf8; font-weight: 600;">${p.altitude_km} km</span>
+                </div>
+                ${p.sensor ? `<div style="color: #34d399; font-size: 9.5px; margin-top: 3px; font-weight: bold;">PAYLOAD: ${p.sensor}</div>` : ''}
+              </div>
+            `;
+            popup.setLngLat(coords).setHTML(satPopupHtml).addTo(map);
+          }
+        });
       });
 
       // Bounds change listener
@@ -813,6 +1052,15 @@ export const MapContainer: React.FC<MapContainerProps> = ({
         const b = map.getBounds();
         setViewZoom(map.getZoom());
         onBoundsChangeRef.current([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]);
+
+        // Restrict infinite horizontal panning in 2D Plane: smooth snap-back if dragged beyond ±180°
+        if (!is3DRef.current) {
+          const center = map.getCenter();
+          if (center.lng > 180 || center.lng < -180) {
+            const clampedLng = Math.max(-180, Math.min(180, center.lng));
+            map.easeTo({ center: [clampedLng, center.lat], duration: 300 });
+          }
+        }
       };
 
       map.on('moveend', reportBounds);
@@ -824,12 +1072,12 @@ export const MapContainer: React.FC<MapContainerProps> = ({
       if (deckOverlayRef.current) {
         try {
           map.removeControl(deckOverlayRef.current as any);
-        } catch {}
+        } catch { }
         deckOverlayRef.current = null;
       }
       try {
         map.remove();
-      } catch {}
+      } catch { }
     };
   }, []);
 
@@ -846,6 +1094,15 @@ export const MapContainer: React.FC<MapContainerProps> = ({
       } catch (e) {
         console.warn('setProjection error:', e);
       }
+
+      // Restrict infinite horizontal world scrolling in 2D Plane mode
+      try {
+        if (typeof (map as any).setRenderWorldCopies === 'function') {
+          (map as any).setRenderWorldCopies(is3D ? true : false);
+        }
+      } catch (copiesErr) {
+        console.warn('Error adjusting 2D world copies:', copiesErr);
+      }
     };
 
     if (map.isStyleLoaded()) {
@@ -854,20 +1111,46 @@ export const MapContainer: React.FC<MapContainerProps> = ({
       map.once('style.load', applyProjection);
     }
 
-    map.easeTo({
-      pitch: is3D ? 45 : 0,
-      bearing: is3D ? -12 : 0,
-      duration: 1200
-    });
+    if (typeof (map as any).setFog === 'function') {
+      if (is3D) {
+        (map as any).setFog({
+          color: '#070d1e',
+          'high-color': '#0369a1',
+          'horizon-blend': 0.08,
+          'space-color': '#02040a',
+          'star-intensity': 0.6
+        });
+      } else {
+        (map as any).setFog(null as any);
+      }
+    }
+
+    if (!is3D && map.getZoom() < 3.8) {
+      map.easeTo({
+        pitch: 0,
+        bearing: 0,
+        zoom: 4.5,
+        duration: 1200
+      });
+    } else {
+      map.easeTo({
+        pitch: is3D ? 45 : 0,
+        bearing: is3D ? -12 : 0,
+        duration: 1200
+      });
+    }
   }, [is3D]);
 
-  // 3. Basemap style toggle handler
-  const handleToggleBasemap = (newMode: 'SATELLITE' | 'DARK') => {
+  // 3. Basemap style toggle synchronization (Satellite View vs Black Canvas)
+  const currentBasemapRef = useRef(basemapMode);
+  useEffect(() => {
     const map = mapRef.current;
-    if (!map || basemapMode === newMode) return;
+    if (!map) return;
+    if (currentBasemapRef.current === basemapMode) return;
+    currentBasemapRef.current = basemapMode;
 
-    setBasemapMode(newMode);
-    map.setStyle(newMode === 'SATELLITE' ? SATELLITE_GLOBE_STYLE : DARK_TACTICAL_STYLE);
+    const newStyle = getBasemapStyle(basemapMode, is3D);
+    map.setStyle(newStyle);
 
     map.once('style.load', () => {
       setupLayers(map);
@@ -878,8 +1161,59 @@ export const MapContainer: React.FC<MapContainerProps> = ({
       } catch (e) {
         console.warn('Error applying projection on basemap change:', e);
       }
+
+      // Restrict infinite horizontal world scrolling in 2D Plane mode
+      try {
+        if (typeof (map as any).setRenderWorldCopies === 'function') {
+          (map as any).setRenderWorldCopies(is3D ? true : false);
+        }
+      } catch (copiesErr) {
+        console.warn('Error adjusting 2D world copies on style load:', copiesErr);
+      }
+
+      if (is3D && typeof (map as any).setFog === 'function') {
+        (map as any).setFog({
+          color: '#070d1e',
+          'high-color': '#0369a1',
+          'horizon-blend': 0.08,
+          'space-color': '#02040a',
+          'star-intensity': 0.6
+        });
+      }
+
+      if (sitesData) {
+        const filteredFeatures = sitesData.features.filter(
+          feature => isSiteVisible(feature, filters)
+        );
+        const source = map.getSource('sites-geojson') as maplibregl.GeoJSONSource | undefined;
+        if (source && typeof source.setData === 'function') {
+          source.setData({
+            type: 'FeatureCollection',
+            features: filteredFeatures
+          });
+        }
+      }
+
+      const satLayerIds = ['satellites-layer', 'satellites-primary-halo', 'satellites-primary-core', 'satellites-primary-label'];
+      satLayerIds.forEach(id => {
+        if (map.getLayer(id)) {
+          map.setLayoutProperty(id, 'visibility', showSatellites ? 'visible' : 'none');
+        }
+      });
+      if (map.getLayer('satellite-orbit-lines')) {
+        map.setLayoutProperty('satellite-orbit-lines', 'visibility', showSatellites ? 'visible' : 'none');
+      }
+      if (map.getLayer('satellite-swaths-fill')) {
+        map.setLayoutProperty('satellite-swaths-fill', 'visibility', showSwaths ? 'visible' : 'none');
+      }
+      if (map.getLayer('satellite-swaths-line')) {
+        map.setLayoutProperty('satellite-swaths-line', 'visibility', showSwaths ? 'visible' : 'none');
+      }
+      if (map.getLayer('thermal-heat-bloom')) {
+        map.setLayoutProperty('thermal-heat-bloom', 'visibility', showHeatBloom ? 'visible' : 'none');
+      }
     });
-  };
+  }, [basemapMode, is3D, sitesData, filters, showSatellites, showSwaths, showHeatBloom]);
 
   // 4. Focus coordinates when explicitly requested (e.g. "Locate" button in Alert Rail)
   useEffect(() => {
@@ -921,9 +1255,12 @@ export const MapContainer: React.FC<MapContainerProps> = ({
     }
 
     // Toggle satellite layer visibility
-    if (map.getLayer('satellites-layer')) {
-      map.setLayoutProperty('satellites-layer', 'visibility', showSatellites ? 'visible' : 'none');
-    }
+    const satAllLayers = ['satellites-layer', 'satellites-primary-halo', 'satellites-primary-core', 'satellites-primary-label'];
+    satAllLayers.forEach(id => {
+      if (map.getLayer(id)) {
+        map.setLayoutProperty(id, 'visibility', showSatellites ? 'visible' : 'none');
+      }
+    });
     if (map.getLayer('satellite-orbit-lines')) {
       map.setLayoutProperty('satellite-orbit-lines', 'visibility', showSatellites ? 'visible' : 'none');
     }
@@ -944,24 +1281,26 @@ export const MapContainer: React.FC<MapContainerProps> = ({
     // Update 3D Deck.gl Volumetric Columns (Thermal FRP Plumes)
     if (deck) {
       try {
-        // At national/regional zoom levels MapLibre clusters are substantially
-        // cheaper and clearer than thousands of extruded deck.gl columns.
-        if (is3D && show3DColumns && viewZoom >= 7 && filteredFeatures.length > 0) {
-          const spikeScale = filters.spikeHeightScale * 32000;
+        if (is3D && show3DColumns && filteredFeatures.length > 0) {
           const columnFeatures = filteredFeatures.slice(0, MAX_3D_COLUMNS);
+          const radius = viewZoom < 5 ? 20000 : (viewZoom < 7 ? 8000 : (viewZoom < 10 ? 3000 : 1400));
+          const baseScale = viewZoom < 5 ? 120000 : (viewZoom < 7 ? 60000 : 32000);
+          const spikeScale = (filters.spikeHeightScale || 1) * baseScale;
 
           const columnLayer = new ColumnLayer({
             id: 'thermal-3d-spikes',
             data: columnFeatures,
             diskResolution: 16,
-            radius: 1400,
+            radius: radius,
             extruded: true,
             pickable: true,
             elevationScale: 1,
             getPosition: (d: SiteGeoJSONFeature) => d.geometry.coordinates,
             getElevation: (d: SiteGeoJSONFeature) => {
-              const rawScore = d.properties.c_score ?? 0;
-              return Math.max(1200, rawScore * spikeScale);
+              const rawScore = d.properties.c_score ?? 0.3;
+              const frp = d.properties.latest_frp ? Math.min(100, d.properties.latest_frp) / 50 : 0.5;
+              const magnitude = Math.max(rawScore, frp);
+              return Math.max(viewZoom < 5 ? 20000 : 1200, magnitude * spikeScale);
             },
             getFillColor: (d: SiteGeoJSONFeature) => {
               const cStatus = d.properties.c_status;
@@ -1011,129 +1350,67 @@ export const MapContainer: React.FC<MapContainerProps> = ({
     <div className="relative w-full h-full flex-1 bg-[#02040a] overflow-hidden">
       <div ref={mapContainerRef} className="absolute inset-0 w-full h-full" />
 
-      {/* Top-Right Tactical HUD Control Cluster */}
-      <div className="absolute top-4 right-4 z-10 flex flex-col items-end gap-2">
-        {/* Main Basemap & Sensor Swath Group */}
-        <div className="flex items-center gap-1.5 p-1 rounded-lg tactical-glass shadow-2xl">
-          {/* Basemap Switcher */}
-          <div className="flex bg-black/40 border border-white/10 rounded p-0.5 text-[10px] font-mono">
-            <button
-              onClick={() => handleToggleBasemap('SATELLITE')}
-              className={`px-2 py-1 rounded flex items-center gap-1 transition-colors ${
-                basemapMode === 'SATELLITE'
-                  ? 'bg-cyan-500/25 text-cyan-300 border border-cyan-500/40 font-bold'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Globe className="w-3 h-3" />
-              <span>ORBITAL GLOBE</span>
-            </button>
-            <button
-              onClick={() => handleToggleBasemap('DARK')}
-              className={`px-2 py-1 rounded flex items-center gap-1 transition-colors ${
-                basemapMode === 'DARK'
-                  ? 'bg-cyan-500/25 text-cyan-300 border border-cyan-500/40 font-bold'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Layers className="w-3 h-3" />
-              <span>DARK CANVAS</span>
-            </button>
-          </div>
-
-          <div className="w-[1px] h-4 bg-white/10 mx-0.5" />
-
-          {/* Heat Bloom Corona Toggle */}
-          <button
-            onClick={() => setShowHeatBloom(!showHeatBloom)}
-            className={`px-2 py-1 rounded border text-[10px] font-mono flex items-center gap-1 transition-all ${
-              showHeatBloom
-                ? 'bg-amber-500/20 border-amber-500/40 text-amber-300 font-bold shadow-[0_0_10px_rgba(245,158,11,0.2)]'
-                : 'bg-black/30 border-white/10 text-slate-400 hover:text-slate-200'
-            }`}
-            title="Toggle Radiative FRP Heat Bloom Coronas"
-          >
-            <Flame className="w-3 h-3 text-amber-400" />
-            <span>HEAT BLOOM</span>
-          </button>
-
-          {/* 3D Thermal Plumes Toggle (in 3D mode) */}
-          {is3D && (
-            <button
-              onClick={() => setShow3DColumns(!show3DColumns)}
-              className={`px-2 py-1 rounded border text-[10px] font-mono flex items-center gap-1 transition-all ${
-                show3DColumns
-                  ? 'bg-red-500/20 border-red-500/40 text-red-300 font-bold shadow-[0_0_10px_rgba(239,68,68,0.2)]'
-                  : 'bg-black/30 border-white/10 text-slate-400 hover:text-slate-200'
-              }`}
-              title="Toggle 3D Volumetric Thermal FRP Spikes"
-            >
-              <Zap className="w-3 h-3 text-red-400" />
-              <span>3D PLUMES</span>
-            </button>
-          )}
-
-          {/* Satellite Constellation Toggle */}
-          <button
-            onClick={() => setShowSatellites(!showSatellites)}
-            className={`px-2 py-1 rounded border text-[10px] font-mono flex items-center gap-1 transition-all ${
-              showSatellites
-                ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300 font-bold shadow-[0_0_10px_rgba(16,185,129,0.2)]'
-                : 'bg-black/30 border-white/10 text-slate-400 hover:text-slate-200'
-            }`}
-            title="Toggle 3D Satellite Constellation"
-          >
-            <Satellite className="w-3 h-3 text-emerald-400" />
-            <span>SATELLITES ({showSatellites ? '1.8K' : 'OFF'})</span>
-          </button>
-
-          {/* VIIRS Swaths Toggle */}
-          <button
-            onClick={() => setShowSwaths(!showSwaths)}
-            className={`px-2 py-1 rounded border text-[10px] font-mono flex items-center gap-1 transition-all ${
-              showSwaths
-                ? 'bg-cyan-500/20 border-cyan-500/40 text-cyan-300 font-bold shadow-[0_0_10px_rgba(6,182,212,0.2)]'
-                : 'bg-black/30 border-white/10 text-slate-400 hover:text-slate-200'
-            }`}
-            title="Toggle VIIRS 3,000 km Scanning Swath Footprints"
-          >
-            <Radio className="w-3 h-3 text-cyan-400" />
-            <span>SWATH</span>
-          </button>
-        </div>
-
-        {/* 3D Spherical Atmosphere Status Badge */}
-        {is3D && (
-          <div className="flex items-center gap-2 px-3 py-1 rounded tactical-glass border border-cyan-500/30 text-[10px] font-mono text-cyan-300 shadow-[0_0_15px_rgba(6,182,212,0.15)]">
-            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping-slow" />
-            <span>3D SPHERICAL GLOBE &middot; ATMOSPHERE ACTIVE</span>
-          </div>
-        )}
-      </div>
-
       {/* Bottom-Left Viewport Operational Telemetry Bar */}
-      <div className="absolute bottom-4 left-4 z-10 hidden sm:flex items-center gap-3 px-3.5 py-1.5 rounded-lg tactical-glass border border-white/15 text-[10px] font-mono shadow-2xl">
+      <div className="absolute bottom-4 left-4 z-10 hidden sm:flex items-center gap-2.5 px-3.5 py-1.5 rounded-full border border-sky-400/30 bg-[#070e1e]/85 backdrop-blur-md text-[10px] font-mono shadow-[0_4px_16px_rgba(0,0,0,0.5)]">
         <div className="flex items-center gap-1.5 text-slate-300">
-          <Sparkles className="w-3 h-3 text-cyan-400" />
+          <Sparkles className="w-3 h-3 text-[#89E5FC]" />
           <span className="text-slate-400">RENDERED:</span>
           <span className="font-bold text-white">{visibleSiteCount.toLocaleString()}</span>
           {sitesData && sitesData.total_count > sitesData.returned_count && (
-            <span className="text-slate-500">
-              of {sitesData.total_count.toLocaleString()} matched
-            </span>
+            <span className="text-slate-500">/{sitesData.total_count.toLocaleString()}</span>
           )}
           {isLoading && <span className="text-cyan-300 animate-pulse">UPDATING</span>}
         </div>
-        <div className="w-[1px] h-3 bg-white/20" />
-        <div className="flex items-center gap-1.5 text-slate-300">
-          <span className="text-slate-400">OPTICAL RESOLUTION:</span>
-          <span className="font-bold text-amber-400">375m VIIRS</span>
+        <div className="w-[1px] h-3 bg-sky-400/20" />
+        <div className="flex items-center gap-1 text-slate-300">
+          <span className="text-slate-400">VIIRS:</span>
+          <span className="font-bold text-amber-400">375m</span>
         </div>
-        <div className="w-[1px] h-3 bg-white/20" />
-        <div className="flex items-center gap-1.5 text-slate-300">
-          <span className="text-slate-400">PHYSICAL CLUSTER:</span>
-          <span className="font-bold text-emerald-400">750m DBSCAN</span>
+        <div className="w-[1px] h-3 bg-sky-400/20" />
+        <div className="flex items-center gap-1 text-slate-300">
+          <span className="text-slate-400">DBSCAN:</span>
+          <span className="font-bold text-emerald-400">750m</span>
         </div>
+      </div>
+
+      {/* Bottom-Right Tactical Navigation & Zoom HUD */}
+      <div className="absolute bottom-4 right-4 z-20 flex flex-col items-center gap-1 p-1 rounded-full border border-sky-400/30 bg-[#070e1e]/85 backdrop-blur-md shadow-[0_4px_20px_rgba(0,0,0,0.65)] font-mono text-xs select-none">
+        {/* Zoom In */}
+        <button
+          onClick={() => mapRef.current?.zoomIn({ duration: 300 })}
+          aria-label="Zoom In"
+          title="Zoom In"
+          type="button"
+          className="w-7 h-7 flex items-center justify-center rounded-full text-slate-300 hover:text-white hover:bg-[#16385c]/80 transition-all cursor-pointer active:scale-95"
+        >
+          <Plus className="w-3.5 h-3.5 text-[#89E5FC]" />
+        </button>
+
+        <span className="w-4 h-px bg-sky-400/20" />
+
+        {/* Zoom Out */}
+        <button
+          onClick={() => mapRef.current?.zoomOut({ duration: 300 })}
+          aria-label="Zoom Out"
+          title="Zoom Out"
+          type="button"
+          className="w-7 h-7 flex items-center justify-center rounded-full text-slate-300 hover:text-white hover:bg-[#16385c]/80 transition-all cursor-pointer active:scale-95"
+        >
+          <Minus className="w-3.5 h-3.5 text-[#89E5FC]" />
+        </button>
+
+        <span className="w-4 h-px bg-sky-400/20" />
+
+        {/* Reset North & Orientation */}
+        <button
+          onClick={() => mapRef.current?.resetNorthPitch({ duration: 600 })}
+          aria-label="Reset Orientation"
+          title="Reset Orientation"
+          type="button"
+          className="w-7 h-7 flex items-center justify-center rounded-full text-slate-300 hover:text-white hover:bg-[#16385c]/80 transition-all cursor-pointer active:scale-95 group"
+        >
+          <Compass className="w-3.5 h-3.5 text-sky-400 group-hover:rotate-45 transition-transform duration-300" />
+        </button>
       </div>
     </div>
   );

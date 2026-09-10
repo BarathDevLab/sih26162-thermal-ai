@@ -16,6 +16,7 @@ export interface SatelliteFeature {
     altitude_km: number;
     color: string;
     sensor?: string;
+    is_primary?: boolean;
   };
 }
 
@@ -100,17 +101,17 @@ export function getSatelliteOrbitRings(): { type: 'FeatureCollection'; features:
 }
 
 // 2. Generate Dense Satellite Constellation (LEO & Polar Shells)
-export function getSatelliteConstellation(count: number = 1600): { type: 'FeatureCollection'; features: SatelliteFeature[] } {
+export function getSatelliteConstellation(count: number = 260): { type: 'FeatureCollection'; features: SatelliteFeature[] } {
   const satellites: SatelliteFeature[] = [];
 
-  // Key primary missions
+  // Key primary missions (NOAA, NASA, ESA thermal & optical)
   const primaryMissions = [
-    { name: 'NOAA-20 (JPSS-1)', sensor: 'VIIRS Thermal 375m', lat: 28.4, lon: 77.1, color: '#38bdf8' },
-    { name: 'NOAA-21 (JPSS-2)', sensor: 'VIIRS Thermal 375m', lat: -15.2, lon: 82.5, color: '#38bdf8' },
-    { name: 'Suomi-NPP', sensor: 'VIIRS Thermal 375m', lat: 45.1, lon: 72.3, color: '#22c55e' },
-    { name: 'Aqua (EOS PM-1)', sensor: 'MODIS Thermal 1km', lat: 12.8, lon: 80.2, color: '#f59e0b' },
-    { name: 'Terra (EOS AM-1)', sensor: 'MODIS Thermal 1km', lat: -32.5, lon: 68.4, color: '#f59e0b' },
-    { name: 'Landsat-9', sensor: 'TIRS-2 Thermal 100m', lat: 21.0, lon: 78.5, color: '#a855f7' },
+    { name: 'NOAA-20 (VIIRS)', sensor: 'VIIRS Thermal 375m', lat: 28.4, lon: 77.1, color: '#00f0ff' },
+    { name: 'NOAA-21 (VIIRS)', sensor: 'VIIRS Thermal 375m', lat: -15.2, lon: 82.5, color: '#38bdf8' },
+    { name: 'Suomi-NPP', sensor: 'VIIRS Thermal 375m', lat: 45.1, lon: 72.3, color: '#34d399' },
+    { name: 'MODIS Aqua', sensor: 'MODIS Thermal 1km', lat: 12.8, lon: 80.2, color: '#06b6d4' },
+    { name: 'MODIS Terra', sensor: 'MODIS Thermal 1km', lat: -32.5, lon: 68.4, color: '#38bdf8' },
+    { name: 'Landsat-9', sensor: 'TIRS-2 Thermal 100m', lat: 21.0, lon: 78.5, color: '#818cf8' },
     { name: 'Sentinel-2A', sensor: 'MSI Optical 10m-20m', lat: 34.2, lon: 85.0, color: '#10b981' }
   ];
 
@@ -124,13 +125,14 @@ export function getSatelliteConstellation(count: number = 1600): { type: 'Featur
         type: 'THERMAL_NRT',
         altitude_km: 824,
         color: m.color,
-        sensor: m.sensor
+        sensor: m.sensor,
+        is_primary: true
       }
     });
   });
 
-  // Orbital shell colors: Cyan, Neon Green, Orange-Red, Purple
-  const colorPool = ['#38bdf8', '#22c55e', '#ef4444', '#f97316', '#a855f7', '#06b6d4'];
+  // Orbital shell colors: High-tech aerospace telemetry tones (blues, cyans, emerald, ice)
+  const colorPool = ['#38bdf8', '#00f0ff', '#818cf8', '#34d399', '#bae6fd'];
 
   // Seed pseudo-random reproducible satellites
   let seed = 42;
@@ -160,7 +162,8 @@ export function getSatelliteConstellation(count: number = 1600): { type: 'Featur
         name: `LEO-SAT-${(1000 + i).toString(16).toUpperCase()}`,
         type: pseudoRandom() > 0.7 ? 'THERMAL_NRT' : 'SURVEILLANCE',
         altitude_km: Math.round(550 + pseudoRandom() * 400),
-        color
+        color,
+        is_primary: false
       }
     });
   }

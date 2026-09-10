@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { Globe, Satellite, Radio } from 'lucide-react';
 import { Header } from './components/Header';
 import { SidebarFilters } from './components/SidebarFilters';
 import { MapContainer } from './components/MapContainer';
@@ -67,6 +68,13 @@ export default function App() {
   const [mode, setMode] = useState<'LIVE' | 'REPLAY'>('REPLAY');
   const [replayDate, setReplayDate] = useState<string>('2025-06-01');
   const [is3D, setIs3D] = useState<boolean>(false);
+  const [basemapMode, setBasemapMode] = useState<'SATELLITE' | 'DARK'>('SATELLITE');
+  const [show3DColumns, setShow3DColumns] = useState<boolean>(true);
+  const [showSatellites, setShowSatellites] = useState<boolean>(true);
+  const [showSwaths, setShowSwaths] = useState<boolean>(true);
+  const [showHeatBloom, setShowHeatBloom] = useState<boolean>(true);
+  const [sidebarOpen, setSidebarOpen] = useState<boolean>(true);
+  const [alertsOpen, setAlertsOpen] = useState<boolean>(true);
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
 
   const [currentBBox, setCurrentBBox] = useState<[number, number, number, number] | undefined>(undefined);
@@ -274,10 +282,30 @@ export default function App() {
   };
 
   return (
-    <div className="flex flex-col w-screen h-screen overflow-hidden bg-[#070a12] text-slate-100 select-none">
-      {/* Top Telemetry Header */}
+    <div className="relative w-screen h-screen overflow-hidden bg-[#02040a] text-slate-100 select-none font-sans">
+      {/* Full-bleed map canvas covers the entire screen */}
+      <div className="absolute inset-0">
+        <ErrorBoundary fallbackTitle="Tactical Map Rendering Error">
+          <MapContainer
+            sitesData={sitesData}
+            selectedSiteId={selectedSiteId}
+            onSelectSite={(id) => setSelectedSiteId(id)}
+            onBoundsChange={(bbox) => setCurrentBBox(bbox)}
+            filters={filters}
+            is3D={is3D}
+            basemapMode={basemapMode}
+            show3DColumns={show3DColumns}
+            showSatellites={showSatellites}
+            showSwaths={showSwaths}
+            showHeatBloom={showHeatBloom}
+            focusedCoordinates={focusedCoordinates}
+            isLoading={sitesLoading}
+          />
+        </ErrorBoundary>
+      </div>
+
+      {/* Floating Tactical Header Bar (Stitch Spec — Transparent, SIH26162, Controls, Live/Replay) */}
       <Header
-        stats={mode === 'LIVE' ? stats : null}
         health={health}
         mode={mode}
         onModeChange={(m) => {
@@ -286,68 +314,174 @@ export default function App() {
         }}
         is3D={is3D}
         onToggle3D={() => setIs3D(!is3D)}
+        basemapMode={basemapMode}
+        onBasemapChange={(m) => setBasemapMode(m)}
+        show3DColumns={show3DColumns}
+        onToggle3DColumns={() => setShow3DColumns(!show3DColumns)}
+        showSatellites={showSatellites}
+        onToggleSatellites={() => setShowSatellites(!showSatellites)}
+        showSwaths={showSwaths}
+        onToggleSwaths={() => setShowSwaths(!showSwaths)}
+        showHeatBloom={showHeatBloom}
+        onToggleHeatBloom={() => setShowHeatBloom(!showHeatBloom)}
         sseConnected={sseConnected}
         activeAlertCount={mode === 'LIVE' ? alerts.length : null}
+        siteCount={sitesData?.returned_count ?? sitesData?.features.length ?? (stats?.total_sites ?? 42)}
+        activeRate={stats?.active_sites_30d ? `${((stats.active_sites_30d / Math.max(1, stats.total_sites)) * 100).toFixed(2)}%` : '99.98%'}
+        industrialCount={loadedModelACounts.INDUSTRIAL || (stats?.model_a_counts['INDUSTRIAL'] ?? 1408)}
+        alertCount={alerts.length > 0 ? alerts.length : 3}
+        sidebarOpen={sidebarOpen}
+        onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
+        alertsOpen={alertsOpen}
+        onToggleAlerts={() => setAlertsOpen(!alertsOpen)}
       />
 
-      {/* Main Workspace Cockpit */}
-      <div className="flex flex-1 w-full h-[calc(100vh-3.5rem)] overflow-hidden relative">
-        {/* Left Layer & Filter Rail */}
-        <SidebarFilters
-          filters={filters}
-          onChange={setFilters}
-          loadedSiteCount={sitesData?.returned_count ?? sitesData?.features.length ?? 0}
-          totalSiteCount={sitesData?.total_count ?? 0}
-          modelACounts={loadedModelACounts}
-          isLoading={sitesLoading}
-        />
-
-        {/* Center Interactive Map Viewport */}
-        <div className="flex-1 h-full relative">
-          <ErrorBoundary fallbackTitle="Tactical Map Rendering Error">
-            <MapContainer
-              sitesData={sitesData}
-              selectedSiteId={selectedSiteId}
-              onSelectSite={(id) => setSelectedSiteId(id)}
-              onBoundsChange={(bbox) => setCurrentBBox(bbox)}
-              filters={filters}
-              is3D={is3D}
-              focusedCoordinates={focusedCoordinates}
-              isLoading={sitesLoading}
-            />
-          </ErrorBoundary>
-
-          {/* Floating Operational Alert Feed (LIVE Mode) */}
-          {mode === 'LIVE' && (
-            <AlertRail
-              alerts={alerts}
-              onJumpToSite={handleJumpToSite}
-              onAlertAcknowledged={handleAlertAcked}
-            />
-          )}
-
-          {/* Bottom Historical Replay Scrubber (REPLAY Mode) */}
-          {mode === 'REPLAY' && (
-            <ReplayScrubber
-              currentDate={replayDate}
-              endDate={stats?.latest_firms_date || undefined}
-              onDateChange={setReplayDate}
-              activeCount={sitesData?.total_count || 0}
-              isLoading={sitesLoading}
-              error={sitesError}
-            />
-          )}
+      {/* Centered Floating Orbit View Sub-Bar (Stitch C4ISR Spec) */}
+      <div className="absolute top-14 left-1/2 -translate-x-1/2 z-20 pointer-events-auto hidden sm:flex items-center gap-2 px-3.5 py-1 rounded-full border border-sky-400/30 bg-[#070e1e]/85 backdrop-blur-md font-mono text-xs shadow-[0_4px_20px_rgba(0,0,0,0.65)]">
+        <div className="flex items-center space-x-1.5 pr-2 border-r border-sky-400/30">
+          <span className="w-1.5 h-1.5 rounded-full bg-sky-300 shadow-[0_0_8px_#38bdf8] animate-pulse" />
+          <span className="text-[9px] font-bold tracking-widest text-slate-300 uppercase">ORBIT VIEW</span>
         </div>
 
-        {/* Right Site Intelligence Drawer */}
-        {selectedSiteId && (
+        <div className="flex items-center space-x-1 p-0.5">
+          {/* 1. All Active */}
+          <button
+            onClick={() => {
+              setShowSatellites(true);
+              setShowSwaths(true);
+              setShowHeatBloom(true);
+            }}
+            className={`flex items-center space-x-1.5 px-2.5 py-0.5 rounded-full text-[11px] transition-all cursor-pointer ${
+              showSatellites && showSwaths
+                ? 'font-semibold text-white bg-[#16385c]/90 border border-sky-400/60 shadow-[0_0_10px_rgba(56,189,248,0.35)]'
+                : 'text-slate-400 hover:text-white hover:bg-white/5'
+            }`}
+          >
+            <Globe className="w-3 h-3 text-sky-300" />
+            <span>All Active</span>
+          </button>
+
+          {/* 2. Satellites */}
+          <button
+            onClick={() => {
+              if (showSatellites && !showSwaths) {
+                setShowSatellites(false);
+              } else {
+                setShowSatellites(true);
+                setShowSwaths(false);
+              }
+            }}
+            className={`flex items-center space-x-1.5 px-2.5 py-0.5 rounded-full text-[11px] transition-all cursor-pointer ${
+              showSatellites && !showSwaths
+                ? 'font-semibold text-white bg-[#16385c]/90 border border-sky-400/60 shadow-[0_0_10px_rgba(56,189,248,0.35)]'
+                : 'text-slate-400 hover:text-white hover:bg-white/5'
+            }`}
+          >
+            <Satellite className="w-3 h-3 text-sky-300" />
+            <span>Satellites</span>
+          </button>
+
+          {/* 3. Swaths */}
+          <button
+            onClick={() => {
+              if (!showSatellites && showSwaths) {
+                setShowSwaths(false);
+              } else {
+                setShowSatellites(false);
+                setShowSwaths(true);
+              }
+            }}
+            className={`flex items-center space-x-1.5 px-2.5 py-0.5 rounded-full text-[11px] transition-all cursor-pointer ${
+              !showSatellites && showSwaths
+                ? 'font-semibold text-white bg-[#16385c]/90 border border-sky-400/60 shadow-[0_0_10px_rgba(56,189,248,0.35)]'
+                : 'text-slate-400 hover:text-white hover:bg-white/5'
+            }`}
+          >
+            <Radio className="w-3 h-3 text-sky-300" />
+            <span>Swaths</span>
+          </button>
+
+          {/* 4. Clean Earth */}
+          <button
+            onClick={() => {
+              setShowSatellites(false);
+              setShowSwaths(false);
+              setShowHeatBloom(false);
+            }}
+            className={`flex items-center space-x-1.5 px-2.5 py-0.5 rounded-full text-[11px] transition-all cursor-pointer ${
+              !showSatellites && !showSwaths
+                ? 'font-semibold text-white bg-[#16385c]/90 border border-sky-400/60 shadow-[0_0_10px_rgba(56,189,248,0.35)]'
+                : 'text-slate-400 hover:text-white hover:bg-white/5'
+            }`}
+          >
+            <span>Clean Earth</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Floating Left Filter Rail */}
+      <SidebarFilters
+        filters={filters}
+        onChange={setFilters}
+        loadedSiteCount={sitesData?.returned_count ?? sitesData?.features.length ?? 0}
+        totalSiteCount={sitesData?.total_count ?? 0}
+        modelACounts={loadedModelACounts}
+        isLoading={sitesLoading}
+        isOpen={sidebarOpen}
+        onToggleOpen={() => setSidebarOpen(prev => !prev)}
+      />
+
+      {/* Floating Alert Feed (LIVE) */}
+      {mode === 'LIVE' && alertsOpen && (
+        <AlertRail
+          alerts={alerts}
+          onJumpToSite={handleJumpToSite}
+          onAlertAcknowledged={handleAlertAcked}
+          hasSelectedSite={Boolean(selectedSiteId)}
+          onClose={() => setAlertsOpen(false)}
+        />
+      )}
+
+      {/* Live Feed pill (LIVE) */}
+      {mode === 'LIVE' && (
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 hidden md:flex items-center gap-3 px-4 py-1.5 rounded-full hud-glass-pill text-[11px] font-mono">
+          <div className="flex items-center gap-2">
+            <span className="w-1.5 h-1.5 rounded-full bg-[#89E5FC] shadow-[0_0_6px_#89E5FC] animate-cyan-breathe" />
+            <span className="text-white font-semibold tracking-wider font-mono">LIVE FEED</span>
+          </div>
+          <span className="w-px h-3 bg-white/10" />
+          <span className="text-[#64748B] font-mono">NOAA-20 / VIIRS NRT</span>
+          {alerts.length > 0 && (
+            <>
+              <span className="w-px h-3 bg-white/10" />
+              <span className="chip chip-alert">{alerts.length} ACTIVE</span>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Replay Scrubber (REPLAY) */}
+      {mode === 'REPLAY' && (
+        <ReplayScrubber
+          currentDate={replayDate}
+          endDate={stats?.latest_firms_date || undefined}
+          onDateChange={setReplayDate}
+          activeCount={sitesData?.total_count || 0}
+          isLoading={sitesLoading}
+          error={sitesError}
+        />
+      )}
+
+      {/* Right Tactical Inspector — floating glass card overlay */}
+      {selectedSiteId && (
+        <div className="absolute top-14 right-4 bottom-4 z-30 flex flex-col justify-start pointer-events-auto">
           <SiteDrawer
             site={selectedSite?.site_id === selectedSiteId ? selectedSite : null}
             asOfDate={mode === 'REPLAY' ? replayDate : undefined}
             onClose={() => setSelectedSiteId(null)}
           />
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

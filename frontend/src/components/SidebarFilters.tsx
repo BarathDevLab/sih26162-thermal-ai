@@ -1,23 +1,6 @@
-import { useState } from 'react';
-import {
-  SlidersHorizontal,
-  Trees,
-  HelpCircle,
-  Flame,
-  Building2,
-  Wheat,
-  Layers,
-  Box,
-  ChevronDown,
-  ChevronRight,
-  Info
-} from 'lucide-react';
-import {
-  ModelAIcon,
-  ModelBIcon,
-  ModelCIcon,
-  ResolverIcon
-} from './Icons';
+import React, { useState } from 'react';
+import { SlidersHorizontal, Layers, ChevronDown, Zap, ChevronLeft, ChevronRight } from 'lucide-react';
+import { ModelAIcon, ModelBIcon, ModelCIcon } from './Icons';
 import type { FilterState } from '../types/api';
 
 interface SidebarFiltersProps {
@@ -27,6 +10,8 @@ interface SidebarFiltersProps {
   totalSiteCount: number;
   modelACounts: Record<'INDUSTRIAL' | 'NONINDUSTRIAL' | 'UNKNOWN' | 'UNAVAILABLE', number>;
   isLoading: boolean;
+  isOpen?: boolean;
+  onToggleOpen?: () => void;
 }
 
 export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
@@ -35,524 +20,382 @@ export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
   loadedSiteCount,
   totalSiteCount,
   modelACounts,
-  isLoading
+  isLoading,
+  isOpen = true,
+  onToggleOpen
 }) => {
   const [openSections, setOpenSections] = useState({
+    extrusion: false,
+    evidence: false,
     modelA: true,
     modelB: true,
-    modelC: true,
-    elevation3D: true,
-    evidence: true
+    modelC: true
   });
 
-  const toggleSection = (key: keyof typeof openSections) => {
-    setOpenSections(prev => ({ ...prev, [key]: !prev[key] }));
-  };
+  const toggleSection = (key: keyof typeof openSections) =>
+    setOpenSections((prev) => ({ ...prev, [key]: !prev[key] }));
 
   const toggleArrayItem = (key: 'aClasses' | 'bStates' | 'cStatuses' | 'alertSeverities', val: string) => {
     const arr = filters[key];
-    const next = arr.includes(val) ? arr.filter(x => x !== val) : [...arr, val];
-    onChange({ ...filters, [key]: next });
+    onChange({ ...filters, [key]: arr.includes(val) ? arr.filter((x) => x !== val) : [...arr, val] });
   };
 
-  const toggleEvidence = (layer: keyof FilterState['evidenceLayers']) => {
-    onChange({
-      ...filters,
-      evidenceLayers: {
-        ...filters.evidenceLayers,
-        [layer]: !filters.evidenceLayers[layer]
-      }
-    });
-  };
+  const toggleEvidence = (layer: keyof FilterState['evidenceLayers']) =>
+    onChange({ ...filters, evidenceLayers: { ...filters.evidenceLayers, [layer]: !filters.evidenceLayers[layer] } });
+
+  // If collapsed: show compact tactical floating trigger pill
+  if (!isOpen) {
+    return (
+      <aside
+        className="absolute top-14 left-4 z-20 font-mono text-xs select-none pointer-events-auto"
+        data-purpose="telemetry-sidebar-collapsed"
+      >
+        <button
+          onClick={onToggleOpen}
+          type="button"
+          className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-sky-400/30 bg-[#070e1e]/90 backdrop-blur-md text-[#89E5FC] hover:text-white hover:border-sky-400/60 shadow-[0_4px_16px_rgba(0,0,0,0.6)] transition-all cursor-pointer group active:scale-95"
+          title="Expand Model Intel Panel"
+        >
+          <SlidersHorizontal className="w-3.5 h-3.5 text-[#89E5FC] group-hover:rotate-45 transition-transform" />
+          <span className="font-semibold text-[10px] tracking-wider uppercase text-slate-200 group-hover:text-white">MODEL INTEL</span>
+          <span className="px-1.5 py-0.5 rounded-full bg-sky-500/20 text-[#89E5FC] border border-sky-400/30 text-[9px] font-bold">
+            {loadedSiteCount.toLocaleString()}
+          </span>
+          <ChevronRight className="w-3.5 h-3.5 text-slate-400 group-hover:translate-x-0.5 transition-transform" />
+        </button>
+      </aside>
+    );
+  }
+
+  /* ─── Mini toggle switch ─── */
+  const Toggle = ({ checked, onClick }: { checked: boolean; onClick: () => void }) => (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`w-7 h-3.5 rounded-full border p-0.5 flex items-center transition-all cursor-pointer shrink-0 ${checked ? 'bg-[#89E5FC]/20 border-[#89E5FC]/40 justify-end' : 'bg-black/40 border-white/[0.12] justify-start'
+        }`}
+    >
+      <div className={`w-2.5 h-2.5 rounded-full transition-colors ${checked ? 'bg-[#89E5FC] shadow-[0_0_6px_#89E5FC]' : 'bg-[#475569]'}`} />
+    </button>
+  );
+
+  /* ─── Section header ─── */
+  const SectionHeader = ({ icon, label, children, open }: { icon: React.ReactNode; label: string; children?: React.ReactNode; open: boolean }) => (
+    <div className="flex items-center justify-between pb-1 border-b border-white/[0.06]">
+      <div className="flex items-center gap-2">
+        {icon}
+        <span className="text-[10px] text-[#94A3B8] font-semibold tracking-wider uppercase">{label}</span>
+      </div>
+      <div className="flex items-center gap-1.5">
+        {children}
+        <ChevronDown className={`w-3.5 h-3.5 text-[#475569] transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
+      </div>
+    </div>
+  );
+
+  const allExpanded = Object.values(openSections).every(Boolean);
 
   return (
-    <aside className="w-80 bg-[#070a12]/95 border-r border-white/10 flex flex-col h-full select-none z-20 shrink-0 text-xs overflow-y-auto backdrop-blur tactical-glass">
-      {/* Panel Header */}
-      <div className="p-3.5 border-b border-white/10 flex items-center justify-between bg-[#090e1a]">
-        <div className="flex items-center gap-2.5 font-bold text-slate-100 tracking-wider">
-          <div className="w-6 h-6 rounded bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center">
-            <SlidersHorizontal className="w-3.5 h-3.5 text-cyan-400" />
+    <aside
+      className="absolute top-14 left-4 z-20 font-mono text-xs select-none pointer-events-auto"
+      data-purpose="telemetry-left-sidebar"
+    >
+      <div className="w-72 max-h-[calc(100vh-140px)] flex flex-col hud-glass-panel rounded-2xl overflow-hidden border border-sky-400/25 shadow-[0_12px_40px_rgba(0,0,0,0.8)]">
+
+        {/* Fixed Pinned Header */}
+        <div className="p-3.5 border-b border-white/[0.08] bg-[#0c1220]/75 backdrop-blur-md shrink-0">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <SlidersHorizontal className="w-3.5 h-3.5 text-[#89E5FC]" />
+              <span className="font-semibold tracking-wider text-[11px] text-white uppercase">MODEL INTEL</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1 px-2 py-0.5 rounded-full hud-card text-[10px]">
+                <span className="text-[#89E5FC] font-bold">{loadedSiteCount.toLocaleString()}</span>
+                <span className="text-[#475569]">/</span>
+                <span className="text-[#64748B]">{totalSiteCount.toLocaleString()}</span>
+                {isLoading && <span className="w-1.5 h-1.5 rounded-full bg-[#89E5FC] animate-ping ml-0.5" />}
+              </div>
+              {onToggleOpen && (
+                <button
+                  onClick={onToggleOpen}
+                  type="button"
+                  title="Minimize Model Intel"
+                  className="w-5 h-5 flex items-center justify-center rounded-full hover:bg-white/10 text-slate-400 hover:text-white transition-colors cursor-pointer"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
           </div>
-          <span className="font-mono text-[11px] uppercase tracking-wider">LAYER MATRIX</span>
-        </div>
-        <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-900/90 border border-white/10">
-          <ResolverIcon className="w-3 h-3 text-cyan-400" />
-          <span
-            className="text-[10px] font-mono text-cyan-300 font-semibold"
-            title={`${loadedSiteCount.toLocaleString()} loaded of ${totalSiteCount.toLocaleString()} matching viewport sites`}
-          >
-            {loadedSiteCount.toLocaleString()}
-            {totalSiteCount > loadedSiteCount ? `/${totalSiteCount.toLocaleString()}` : ''}
-          </span>
-          <span className="text-[9px] font-mono text-slate-400">
-            {isLoading ? 'SYNC' : totalSiteCount > loadedSiteCount ? 'LOADED' : 'SITES'}
-          </span>
-        </div>
-      </div>
-
-      <div className="p-3 space-y-3">
-        {/* 1. Model A: Source Identity */}
-        <div className="rounded-lg bg-[#0b1120]/80 border border-white/10 overflow-hidden">
-          <button
-            onClick={() => toggleSection('modelA')}
-            className="w-full px-3 py-2 bg-[#0d1424] hover:bg-[#111c33] border-b border-white/5 flex items-center justify-between text-left transition-colors"
-          >
-            <div className="flex items-center gap-2">
-              <ModelAIcon className="w-4 h-4 text-amber-400" />
-              <span className="text-[11px] font-bold text-slate-200 uppercase tracking-wide font-mono">
-                Model A: Identity
-              </span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="text-[9.5px] font-mono px-1.5 py-0.2 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30">
-                {filters.aClasses.length}/4
-              </span>
-              {openSections.modelA ? <ChevronDown className="w-3.5 h-3.5 text-slate-400" /> : <ChevronRight className="w-3.5 h-3.5 text-slate-400" />}
-            </div>
-          </button>
-
-          {openSections.modelA && (
-            <div className="p-2 space-y-1.5">
-              {/* INDUSTRIAL */}
-              <div
-                onClick={() => toggleArrayItem('aClasses', 'INDUSTRIAL')}
-                className={`p-2 rounded flex items-center justify-between cursor-pointer border transition-all ${
-                  filters.aClasses.includes('INDUSTRIAL')
-                    ? 'bg-amber-500/15 border-amber-500/50 shadow-[0_0_10px_rgba(245,158,11,0.15)] text-amber-200'
-                    : 'bg-[#080d18] border-white/5 text-slate-400 hover:border-white/15'
-                }`}
-              >
-                <div className="flex items-center gap-2.5">
-                  <div className={`w-3.5 h-3.5 rounded flex items-center justify-center border ${
-                    filters.aClasses.includes('INDUSTRIAL') ? 'bg-amber-500 border-amber-400' : 'bg-slate-900 border-slate-700'
-                  }`}>
-                    {filters.aClasses.includes('INDUSTRIAL') && <div className="w-1.5 h-1.5 rounded-full bg-slate-950" />}
-                  </div>
-                  <div>
-                    <div className="font-mono font-bold text-[11px] tracking-wide text-slate-100">
-                      INDUSTRIAL
-                    </div>
-                    <div className="text-[9.5px] text-slate-400 font-mono">
-                      Persistent combustion emitter
-                    </div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <span className="min-w-8 text-right font-mono text-[10px] font-bold text-amber-300 tabular-nums">
-                    {modelACounts.INDUSTRIAL.toLocaleString()}
-                  </span>
-                  <span className="w-2.5 h-2.5 rounded-full bg-amber-400 shadow-[0_0_8px_#f59e0b]" />
-                </div>
-              </div>
-
-              {/* NON-INDUSTRIAL */}
-              <div
-                onClick={() => toggleArrayItem('aClasses', 'NONINDUSTRIAL')}
-                className={`p-2 rounded flex items-center justify-between cursor-pointer border transition-all ${
-                  filters.aClasses.includes('NONINDUSTRIAL')
-                    ? 'bg-emerald-500/15 border-emerald-500/50 shadow-[0_0_10px_rgba(16,185,129,0.15)] text-emerald-200'
-                    : 'bg-[#080d18] border-white/5 text-slate-400 hover:border-white/15'
-                }`}
-              >
-                <div className="flex items-center gap-2.5">
-                  <div className={`w-3.5 h-3.5 rounded flex items-center justify-center border ${
-                    filters.aClasses.includes('NONINDUSTRIAL') ? 'bg-emerald-500 border-emerald-400' : 'bg-slate-900 border-slate-700'
-                  }`}>
-                    {filters.aClasses.includes('NONINDUSTRIAL') && <div className="w-1.5 h-1.5 rounded-full bg-slate-950" />}
-                  </div>
-                  <div>
-                    <div className="font-mono font-bold text-[11px] tracking-wide text-slate-100">
-                      NON-INDUSTRIAL
-                    </div>
-                    <div className="text-[9.5px] text-slate-400 font-mono">
-                      Wildfire, stubble, biomass
-                    </div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <span className="min-w-8 text-right font-mono text-[10px] font-bold text-emerald-300 tabular-nums">
-                    {modelACounts.NONINDUSTRIAL.toLocaleString()}
-                  </span>
-                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-[0_0_8px_#10b981]" />
-                </div>
-              </div>
-
-              {/* UNKNOWN */}
-              <div
-                onClick={() => toggleArrayItem('aClasses', 'UNKNOWN')}
-                className={`p-2 rounded flex items-center justify-between cursor-pointer border transition-all ${
-                  filters.aClasses.includes('UNKNOWN')
-                    ? 'bg-indigo-500/15 border-indigo-500/50 shadow-[0_0_10px_rgba(129,140,248,0.15)] text-indigo-200'
-                    : 'bg-[#080d18] border-white/5 text-slate-400 hover:border-white/15'
-                }`}
-              >
-                <div className="flex items-center gap-2.5">
-                  <div className={`w-3.5 h-3.5 rounded flex items-center justify-center border ${
-                    filters.aClasses.includes('UNKNOWN') ? 'bg-indigo-500 border-indigo-400' : 'bg-slate-900 border-slate-700'
-                  }`}>
-                    {filters.aClasses.includes('UNKNOWN') && <div className="w-1.5 h-1.5 rounded-full bg-slate-950" />}
-                  </div>
-                  <div>
-                    <div className="font-mono font-bold text-[11px] tracking-wide text-indigo-200 flex items-center gap-1">
-                      UNKNOWN
-                      <HelpCircle className="w-3 h-3 text-indigo-400" />
-                    </div>
-                    <div className="text-[9.5px] text-indigo-300/70 font-mono">
-                      Review queue &bull; Never coerced
-                    </div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <span className="min-w-8 text-right font-mono text-[10px] font-bold text-indigo-300 tabular-nums">
-                    {modelACounts.UNKNOWN.toLocaleString()}
-                  </span>
-                  <span className="w-2.5 h-2.5 rounded-full bg-indigo-400 shadow-[0_0_8px_#818cf8]" />
-                </div>
-              </div>
-
-              <button
-                onClick={() => toggleArrayItem('aClasses', 'UNAVAILABLE')}
-                className={`w-full p-2 rounded text-left border flex items-center justify-between transition-all ${
-                  filters.aClasses.includes('UNAVAILABLE')
-                    ? 'bg-slate-700/30 border-slate-500/40 text-slate-200'
-                    : 'bg-[#080d18] border-white/5 text-slate-400 hover:border-white/15'
-                }`}
-              >
-                <span>
-                  <span className="block font-mono text-[10.5px] font-bold">UNAVAILABLE</span>
-                  <span className="block text-[9px] text-slate-400 font-mono">No current Model A inference</span>
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <span className="min-w-8 text-right font-mono text-[10px] font-bold text-slate-300 tabular-nums">
-                    {modelACounts.UNAVAILABLE.toLocaleString()}
-                  </span>
-                  <span className="w-2 h-2 rounded-full bg-slate-500" />
-                </span>
-              </button>
-
-              {/* Unambiguous Rule Note */}
-              <div className="mt-1 px-2 py-1.5 rounded bg-indigo-950/30 border border-indigo-500/20 text-[9.5px] text-indigo-300/80 font-mono flex items-start gap-1.5 leading-relaxed">
-                <Info className="w-3 h-3 text-indigo-400 shrink-0 mt-0.5" />
-                <span>Frozen policy: UNKNOWN preserves ambiguity for expert review and is never suppressed.</span>
-              </div>
-            </div>
-          )}
+          <div className="flex items-center justify-between mt-1 pt-1 border-t border-white/[0.04]">
+            <p className="text-[8px] tracking-widest text-[#64748B] uppercase">TAXONOMY & UNCERTAINTY</p>
+            <button
+              onClick={() => {
+                setOpenSections({
+                  extrusion: !allExpanded,
+                  evidence: !allExpanded,
+                  modelA: !allExpanded,
+                  modelB: !allExpanded,
+                  modelC: !allExpanded
+                });
+              }}
+              className="text-[8.5px] text-sky-400/80 hover:text-sky-300 tracking-wider uppercase transition-colors cursor-pointer font-medium"
+            >
+              {allExpanded ? 'COLLAPSE ALL' : 'EXPAND ALL'}
+            </button>
+          </div>
         </div>
 
-        {/* 2. Model B: Temporal State */}
-        <div className="rounded-lg bg-[#0b1120]/80 border border-white/10 overflow-hidden">
-          <button
-            onClick={() => toggleSection('modelB')}
-            className="w-full px-3 py-2 bg-[#0d1424] hover:bg-[#111c33] border-b border-white/5 flex items-center justify-between text-left transition-colors"
-          >
-            <div className="flex items-center gap-2">
-              <ModelBIcon className="w-4 h-4 text-cyan-400" />
-              <span className="text-[11px] font-bold text-slate-200 uppercase tracking-wide font-mono">
-                Model B: Recurrence
-              </span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="text-[9.5px] font-mono px-1.5 py-0.2 rounded bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
-                {filters.bStates.length}/6
-              </span>
-              {openSections.modelB ? <ChevronDown className="w-3.5 h-3.5 text-slate-400" /> : <ChevronRight className="w-3.5 h-3.5 text-slate-400" />}
-            </div>
-          </button>
+        {/* Scrollable Content Body with Guaranteed Padding */}
+        <div className="flex-1 overflow-y-auto p-3 space-y-2.5 pb-6 custom-scrollbar">
 
-          {openSections.modelB && (
-            <div className="p-2 space-y-1">
-              {[
-                { id: 'PERSISTENT', label: 'PERSISTENT', desc: 'Frequent multi-window burns', color: 'bg-cyan-400' },
-                { id: 'REACTIVATED', label: 'REACTIVATED', desc: 'Returned after a ≥90d gap', color: 'bg-purple-400' },
-                { id: 'INTERMITTENT', label: 'INTERMITTENT', desc: 'Sporadic operating schedule', color: 'bg-sky-400' },
-                { id: 'NEW', label: 'NEW SOURCE', desc: 'First observed within 30d', color: 'bg-teal-400' },
-                { id: 'DORMANT', label: 'DORMANT', desc: 'Inactive for >90 days', color: 'bg-slate-500' },
-                { id: 'UNAVAILABLE', label: 'UNAVAILABLE', desc: 'No Model B state at cutoff', color: 'bg-slate-700' }
-              ].map(b => {
-                const isActive = filters.bStates.includes(b.id);
-                return (
-                  <button
-                    key={b.id}
-                    onClick={() => toggleArrayItem('bStates', b.id)}
-                    className={`w-full p-2 rounded text-left border flex items-center justify-between transition-all ${
-                      isActive
-                        ? 'bg-[#131f38] border-cyan-500/40 text-slate-100 shadow-[0_0_8px_rgba(6,182,212,0.12)]'
-                        : 'bg-[#080d18] border-white/5 text-slate-400 hover:text-slate-200 hover:border-white/15'
-                    }`}
-                  >
-                    <div>
-                      <div className="font-mono text-[10.5px] font-bold tracking-wide">
-                        {b.label}
-                      </div>
-                      <div className="text-[9px] text-slate-400 font-mono">
-                        {b.desc}
-                      </div>
-                    </div>
-                    <span className={`w-2 h-2 rounded-full ${b.color} ${isActive ? 'shadow-[0_0_6px_currentColor]' : 'opacity-40'}`} />
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        {/* 3. Model C: Anomaly Severity Status */}
-        <div className="rounded-lg bg-[#0b1120]/80 border border-white/10 overflow-hidden">
-          <button
-            onClick={() => toggleSection('modelC')}
-            className="w-full px-3 py-2 bg-[#0d1424] hover:bg-[#111c33] border-b border-white/5 flex items-center justify-between text-left transition-colors"
-          >
-            <div className="flex items-center gap-2">
-              <ModelCIcon className="w-4 h-4 text-orange-400" />
-              <span className="text-[11px] font-bold text-slate-200 uppercase tracking-wide font-mono">
-                Model C: Anomaly
-              </span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="text-[9.5px] font-mono px-1.5 py-0.2 rounded bg-orange-500/15 text-orange-300 border border-orange-500/30">
-                {filters.cStatuses.length}/7
-              </span>
-              {openSections.modelC ? <ChevronDown className="w-3.5 h-3.5 text-slate-400" /> : <ChevronRight className="w-3.5 h-3.5 text-slate-400" />}
-            </div>
-          </button>
-
-          {openSections.modelC && (
-            <div className="p-2 space-y-1.5">
-              {[
-                { id: 'CRITICAL', label: 'CRITICAL', score: 'P ≥ 0.999', desc: 'Extreme calibrated anomaly', color: 'bg-red-500 border-red-400/40 text-red-300', dot: 'bg-red-400 shadow-[0_0_8px_#f87171]' },
-                { id: 'ANOMALOUS', label: 'ANOMALOUS', score: 'P ≥ 0.990', desc: 'High calibrated anomaly', color: 'bg-orange-500/20 border-orange-400/40 text-orange-300', dot: 'bg-orange-400 shadow-[0_0_6px_#fb923c]' },
-                { id: 'ELEVATED', label: 'ELEVATED', score: 'P ≥ 0.950', desc: 'Elevated calibrated anomaly', color: 'bg-amber-500/20 border-amber-400/40 text-amber-300', dot: 'bg-amber-400' },
-                { id: 'NORMAL', label: 'NORMAL', score: 'P < 0.950', desc: 'Within the calibrated baseline', color: 'bg-emerald-500/20 border-emerald-400/40 text-emerald-300', dot: 'bg-emerald-400' },
-                { id: 'INSUFFICIENT_HISTORY', label: 'COLD START', score: '<5 prior days', desc: 'Statistical baseline unavailable', color: 'bg-slate-700/40 border-slate-600/40 text-slate-300', dot: 'bg-slate-400' },
-                { id: 'NO_RECENT_EVENT', label: 'NO RECENT EVENT', score: '>30d inactive', desc: 'Presentation state, not normal', color: 'bg-slate-700/40 border-slate-600/40 text-slate-300', dot: 'bg-slate-500' },
-                { id: 'UNAVAILABLE', label: 'UNAVAILABLE', score: 'N/A', desc: 'No Model C result at cutoff', color: 'bg-slate-700/40 border-slate-600/40 text-slate-300', dot: 'bg-slate-700' }
-              ].map(c => {
-                const isActive = filters.cStatuses.includes(c.id);
-                return (
-                  <div
-                    key={c.id}
-                    onClick={() => toggleArrayItem('cStatuses', c.id)}
-                    className={`p-2 rounded flex items-center justify-between cursor-pointer border transition-all ${
-                      isActive
-                        ? 'bg-[#131f38] border-orange-500/40 text-slate-100 shadow-[0_0_8px_rgba(249,115,22,0.15)]'
-                        : 'bg-[#080d18] border-white/5 text-slate-400 hover:text-slate-200 hover:border-white/15'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <div className={`w-3.5 h-3.5 rounded flex items-center justify-center border ${
-                        isActive ? 'bg-orange-500 border-orange-400' : 'bg-slate-900 border-slate-700'
-                      }`}>
-                        {isActive && <div className="w-1.5 h-1.5 rounded-full bg-slate-950" />}
-                      </div>
-                      <div>
-                        <div className="font-mono text-[10.5px] font-bold flex items-center gap-2">
-                          <span className="text-slate-100">{c.label}</span>
-                          <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-900 border border-white/10 text-slate-400">
-                            {c.score}
-                          </span>
-                        </div>
-                        <div className="text-[9px] text-slate-400 font-mono">
-                          {c.desc}
-                        </div>
-                      </div>
-                    </div>
-                    <span className={`w-2 h-2 rounded-full ${c.dot}`} />
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        {/* 4. 3D Geospatial & Terrain Controls */}
-        <div className="rounded-lg bg-[#0b1120]/80 border border-white/10 overflow-hidden">
-          <button
-            onClick={() => toggleSection('elevation3D')}
-            className="w-full px-3 py-2 bg-[#0d1424] hover:bg-[#111c33] border-b border-white/5 flex items-center justify-between text-left transition-colors"
-          >
-            <div className="flex items-center gap-2">
-              <Box className="w-4 h-4 text-cyan-400" />
-              <span className="text-[11px] font-bold text-slate-200 uppercase tracking-wide font-mono">
-                3D Volumetric Extrusion
-              </span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="text-[9.5px] font-mono px-1.5 py-0.2 rounded bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
-                {filters.spikeHeightScale}x
-              </span>
-              {openSections.elevation3D ? <ChevronDown className="w-3.5 h-3.5 text-slate-400" /> : <ChevronRight className="w-3.5 h-3.5 text-slate-400" />}
-            </div>
-          </button>
-
-          {openSections.elevation3D && (
-            <div className="p-3 space-y-3">
-              <div>
-                <div className="flex items-center justify-between mb-1.5 font-mono text-[10.5px]">
-                  <span className="text-slate-300">FRP Spike Altitude Scale:</span>
-                  <span className="text-cyan-400 font-bold">{filters.spikeHeightScale}x</span>
-                </div>
-                <input
-                  type="range"
-                  min="1"
-                  max="5"
-                  step="0.5"
-                  value={filters.spikeHeightScale}
-                  onChange={(e) => onChange({ ...filters, spikeHeightScale: parseFloat(e.target.value) })}
-                  className="w-full accent-cyan-400 bg-slate-800 h-1.5 rounded cursor-pointer"
-                />
-                <div className="flex justify-between text-[8.5px] font-mono text-slate-500 mt-1">
-                  <span>1.0x (Flat)</span>
-                  <span>3.0x</span>
-                  <span>5.0x (Mega Spikes)</span>
-                </div>
-              </div>
-
-              <div
-                onClick={() => onChange({ ...filters, terrain3D: !filters.terrain3D })}
-                className={`p-2 rounded flex items-center justify-between cursor-pointer border transition-all ${
-                  filters.terrain3D
-                    ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-200'
-                    : 'bg-[#080d18] border-white/5 text-slate-400 hover:border-white/15'
-                }`}
+          {/* ── Section 1: 3D Extrusion ── */}
+          <div className="hud-card rounded-xl p-2.5 space-y-0">
+            <button onClick={() => toggleSection('extrusion')} className="w-full cursor-pointer text-left">
+              <SectionHeader
+                icon={<Zap className="w-3.5 h-3.5 text-[#89E5FC]" />}
+                label="3D EXTRUSION"
+                open={openSections.extrusion}
               >
+                <span className="chip chip-cyan">{filters.spikeHeightScale.toFixed(1)}×</span>
+              </SectionHeader>
+            </button>
+
+            {openSections.extrusion && (
+              <div className="space-y-2.5 pt-2.5">
                 <div>
-                  <div className="font-mono text-[10.5px] font-bold text-slate-100">
-                    3D Digital Elevation (DEM)
+                  <div className="flex justify-between text-[10px] text-[#64748B] mb-1">
+                    <span>FRP Spike Scale</span>
+                    <span className="text-white font-semibold font-mono">{filters.spikeHeightScale.toFixed(1)}×</span>
                   </div>
-                  <div className="text-[9px] text-slate-400 font-mono">
-                    Terrain topography shading
+                  <input
+                    type="range"
+                    min={1.0} max={5.0} step={0.5}
+                    value={filters.spikeHeightScale}
+                    onChange={(e) => onChange({ ...filters, spikeHeightScale: parseFloat(e.target.value) })}
+                    className="tactical-slider w-full"
+                  />
+                  <div className="flex justify-between text-[8px] text-[#475569] mt-0.5">
+                    <span>1.0× Flat</span><span>5.0× Spikes</span>
                   </div>
                 </div>
-                <div className={`w-8 h-4 rounded-full transition-colors relative ${
-                  filters.terrain3D ? 'bg-cyan-500' : 'bg-slate-800'
-                }`}>
-                  <div className={`w-3 h-3 rounded-full bg-white absolute top-0.5 transition-transform ${
-                    filters.terrain3D ? 'right-0.5' : 'left-0.5'
-                  }`} />
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
 
-        {/* 5. Corroborating Ground-Truth Registries */}
-        <div className="rounded-lg bg-[#0b1120]/80 border border-white/10 overflow-hidden">
-          <button
-            onClick={() => toggleSection('evidence')}
-            className="w-full px-3 py-2 bg-[#0d1424] hover:bg-[#111c33] border-b border-white/5 flex items-center justify-between text-left transition-colors"
-          >
-            <div className="flex items-center gap-2">
-              <Layers className="w-4 h-4 text-blue-400" />
-              <span className="text-[11px] font-bold text-slate-200 uppercase tracking-wide font-mono">
-                Evidence Registries
-              </span>
-            </div>
-            {openSections.evidence ? <ChevronDown className="w-3.5 h-3.5 text-slate-400" /> : <ChevronRight className="w-3.5 h-3.5 text-slate-400" />}
-          </button>
-
-          {openSections.evidence && (
-            <div className="p-2 space-y-1.5">
-              {/* GEM Power Plants */}
-              <div
-                onClick={() => toggleEvidence('gem')}
-                className={`p-2 rounded flex items-center justify-between cursor-pointer border transition-all ${
-                  filters.evidenceLayers.gem
-                    ? 'bg-blue-500/15 border-blue-500/40 text-blue-200 shadow-[0_0_8px_rgba(59,130,246,0.15)]'
-                    : 'bg-[#080d18] border-white/5 text-slate-400 hover:border-white/15'
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  <Building2 className="w-3.5 h-3.5 text-blue-400" />
+                <div
+                  className={`pt-2 border-t border-white/[0.06] flex items-center justify-between p-1.5 rounded-lg transition-all ${
+                    filters.mode3D ? 'bg-black/25 border border-white/[0.12]' : 'bg-transparent border border-transparent'
+                  }`}
+                >
                   <div>
-                    <div className="font-mono text-[10.5px] font-bold text-slate-100">
-                      GEM Thermal Power
-                    </div>
-                    <div className="text-[9px] text-slate-400 font-mono">
-                      Global Energy Monitor
-                    </div>
+                    <span
+                      className={`block text-[10px] font-semibold transition-all ${
+                        filters.mode3D
+                          ? 'text-[#89E5FC] drop-shadow-[0_0_8px_rgba(137,229,252,0.6)]'
+                          : 'text-[#64748B]'
+                      }`}
+                    >
+                      3D Volumetric Mode
+                    </span>
+                    <span className="block text-[8px] text-[#475569]">Render FRP columns</span>
                   </div>
+                  <Toggle checked={filters.mode3D} onClick={() => onChange({ ...filters, mode3D: !filters.mode3D })} />
                 </div>
-                <span className="text-[9.5px] font-mono px-1.5 py-0.2 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30">
-                  962 units
-                </span>
               </div>
+            )}
+          </div>
 
-              {/* World Bank Flaring (GFMR) */}
-              <div
-                onClick={() => toggleEvidence('gfmr')}
-                className={`p-2 rounded flex items-center justify-between cursor-pointer border transition-all ${
-                  filters.evidenceLayers.gfmr
-                    ? 'bg-amber-500/15 border-amber-500/40 text-amber-200 shadow-[0_0_8px_rgba(245,158,11,0.15)]'
-                    : 'bg-[#080d18] border-white/5 text-slate-400 hover:border-white/15'
-                }`}
+          {/* ── Section 2: Evidence Registries ── */}
+          <div className="hud-card rounded-xl p-2.5">
+            <button onClick={() => toggleSection('evidence')} className="w-full cursor-pointer text-left">
+              <SectionHeader
+                icon={<Layers className="w-3.5 h-3.5 text-[#89E5FC]" />}
+                label="EVIDENCE REGISTRIES"
+                open={openSections.evidence}
               >
-                <div className="flex items-center gap-2">
-                  <Flame className="w-3.5 h-3.5 text-amber-400" />
-                  <div>
-                    <div className="font-mono text-[10.5px] font-bold text-slate-100">
-                      World Bank GFMR
-                    </div>
-                    <div className="text-[9px] text-slate-400 font-mono">
-                      Gas Flaring Reduction
-                    </div>
-                  </div>
-                </div>
-                <span className="text-[9.5px] font-mono px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                  174 flares
-                </span>
-              </div>
+                <span className="chip">{Object.values(filters.evidenceLayers).filter(Boolean).length} ACTIVE</span>
+              </SectionHeader>
+            </button>
 
-              {/* ICAR Stubble */}
-              <div
-                onClick={() => toggleEvidence('icar')}
-                className={`p-2 rounded flex items-center justify-between cursor-pointer border transition-all ${
-                  filters.evidenceLayers.icar
-                    ? 'bg-orange-500/15 border-orange-500/40 text-orange-200 shadow-[0_0_8px_rgba(249,115,22,0.15)]'
-                    : 'bg-[#080d18] border-white/5 text-slate-400 hover:border-white/15'
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  <Wheat className="w-3.5 h-3.5 text-orange-400" />
-                  <div>
-                    <div className="font-mono text-[10.5px] font-bold text-slate-100">
-                      ICAR Crop Burns
+            {openSections.evidence && (
+              <div className="space-y-1.5 pt-2">
+                {[
+                  { key: 'gem' as const, label: 'GEM Thermal Plants' },
+                  { key: 'gfmr' as const, label: 'World Bank Gas Flaring' },
+                  { key: 'icar' as const, label: 'ICAR Crop Burning' },
+                  { key: 'fsi' as const, label: 'FSI Forest Perimeters' }
+                ].map((ev) => {
+                  const active = filters.evidenceLayers[ev.key];
+                  return (
+                    <div
+                      key={ev.key}
+                      className={`flex items-center justify-between p-1.5 rounded-lg border transition-all ${
+                        active
+                          ? 'bg-black/25 border-white/[0.12] hover:border-white/[0.18]'
+                          : 'bg-black/20 border-white/[0.06] hover:border-white/[0.10]'
+                      }`}
+                    >
+                      <span
+                        className={`text-[10px] font-semibold transition-all ${
+                          active
+                            ? 'text-[#89E5FC] drop-shadow-[0_0_8px_rgba(137,229,252,0.6)]'
+                            : 'text-[#64748B]'
+                        }`}
+                      >
+                        {ev.label}
+                      </span>
+                      <Toggle checked={active} onClick={() => toggleEvidence(ev.key)} />
                     </div>
-                    <div className="text-[9px] text-slate-400 font-mono">
-                      Stubble burn registry
-                    </div>
-                  </div>
-                </div>
-                <span className="text-[9.5px] font-mono px-1.5 py-0.2 rounded bg-orange-500/20 text-orange-300 border border-orange-500/30">
-                  5,158 pts
-                </span>
+                  );
+                })}
               </div>
+            )}
+          </div>
 
-              {/* FSI Forest Fires */}
-              <div
-                onClick={() => toggleEvidence('fsi')}
-                className={`p-2 rounded flex items-center justify-between cursor-pointer border transition-all ${
-                  filters.evidenceLayers.fsi
-                    ? 'bg-red-500/15 border-red-500/40 text-red-200 shadow-[0_0_8px_rgba(239,68,68,0.15)]'
-                    : 'bg-[#080d18] border-white/5 text-slate-400 hover:border-white/15'
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  <Trees className="w-3.5 h-3.5 text-red-400" />
-                  <div>
-                    <div className="font-mono text-[10.5px] font-bold text-slate-100">
-                      FSI Wildfires
+          {/* ── Section 3: Model A ── */}
+          <div className="hud-card rounded-xl p-2.5">
+            <button onClick={() => toggleSection('modelA')} className="w-full cursor-pointer text-left">
+              <SectionHeader
+                icon={<ModelAIcon className="w-3.5 h-3.5 text-[#89E5FC]" />}
+                label="MODEL A · IDENTITY"
+                open={openSections.modelA}
+              />
+            </button>
+
+            {openSections.modelA && (
+              <div className="space-y-1.5 pt-2">
+                {[
+                  { id: 'INDUSTRIAL', label: 'INDUSTRIAL', desc: 'Smelter, refinery, brick kiln' },
+                  { id: 'NONINDUSTRIAL', label: 'NON-INDUSTRIAL', desc: 'Wildfire, stubble, biomass' },
+                  { id: 'UNKNOWN', label: 'UNKNOWN (?)', desc: 'Review queue · Ambiguity' }
+                ].map((cls) => {
+                  const active = filters.aClasses.includes(cls.id);
+                  return (
+                    <div
+                      key={cls.id}
+                      className="flex items-center justify-between p-1.5 rounded-lg bg-black/20 border border-white/[0.06] hover:border-white/[0.12] transition-all"
+                    >
+                      <div>
+                        <div
+                          className={`text-[10px] font-semibold transition-all ${
+                            active
+                              ? 'text-[#89E5FC] drop-shadow-[0_0_8px_rgba(137,229,252,0.6)]'
+                              : 'text-[#64748B]'
+                          }`}
+                        >
+                          {cls.label}
+                        </div>
+                        <div className="text-[8px] text-[#475569]">{cls.desc}</div>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="chip">{modelACounts[cls.id as keyof typeof modelACounts] ?? 0}</span>
+                        <Toggle checked={active} onClick={() => toggleArrayItem('aClasses', cls.id)} />
+                      </div>
                     </div>
-                    <div className="text-[9px] text-slate-400 font-mono">
-                      Forest Survey of India
-                    </div>
-                  </div>
-                </div>
-                <span className="text-[9.5px] font-mono px-1.5 py-0.2 rounded bg-red-500/20 text-red-300 border border-red-500/30">
-                  Active
-                </span>
+                  );
+                })}
               </div>
-            </div>
-          )}
+            )}
+          </div>
+
+          {/* ── Section 4: Model B ── */}
+          <div className="hud-card rounded-xl p-2.5">
+            <button onClick={() => toggleSection('modelB')} className="w-full cursor-pointer text-left">
+              <SectionHeader
+                icon={<ModelBIcon className="w-3.5 h-3.5 text-[#89E5FC]" />}
+                label="MODEL B · RECURRENCE"
+                open={openSections.modelB}
+              />
+            </button>
+
+            {openSections.modelB && (
+              <div className="space-y-1.5 pt-2">
+                {([
+                  { id: 'PERSISTENT', desc: 'Continuous baseline' },
+                  { id: 'REACTIVATED', desc: 'Re-ignited dormant source' },
+                  { id: 'INTERMITTENT', desc: 'Irregular cadence' },
+                  { id: 'NEW', desc: 'First occurrence <30d' },
+                  { id: 'DORMANT', desc: 'No signal >90d' }
+                ] as { id: string; desc: string }[]).map((state) => {
+                  const active = filters.bStates.includes(state.id);
+                  return (
+                    <div
+                      key={state.id}
+                      className="flex items-center justify-between p-1.5 rounded-lg bg-black/20 border border-white/[0.06] hover:border-white/[0.12] transition-all"
+                    >
+                      <div>
+                        <div
+                          className={`text-[10px] font-semibold transition-all ${
+                            active
+                              ? 'text-[#89E5FC] drop-shadow-[0_0_8px_rgba(137,229,252,0.6)]'
+                              : 'text-[#64748B]'
+                          }`}
+                        >
+                          {state.id}
+                        </div>
+                        <div className="text-[8px] text-[#475569]">{state.desc}</div>
+                      </div>
+                      <Toggle checked={active} onClick={() => toggleArrayItem('bStates', state.id)} />
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* ── Section 5: Model C ── */}
+          <div className="hud-card rounded-xl p-2.5">
+            <button onClick={() => toggleSection('modelC')} className="w-full cursor-pointer text-left">
+              <SectionHeader
+                icon={<ModelCIcon className="w-3.5 h-3.5 text-[#89E5FC]" />}
+                label="MODEL C · ANOMALY"
+                open={openSections.modelC}
+              />
+            </button>
+
+            {openSections.modelC && (
+              <div className="space-y-1.5 pt-2">
+                {([
+                  { id: 'CRITICAL', label: 'CRITICAL', desc: '≥P99 anomaly score', alert: true },
+                  { id: 'ANOMALOUS', label: 'ANOMALOUS', desc: '≥P95 anomaly score', alert: true },
+                  { id: 'ELEVATED', label: 'ELEVATED', desc: '≥P90 anomaly score', alert: false },
+                  { id: 'NORMAL', label: 'NORMAL', desc: 'Below P90', alert: false },
+                  { id: 'INSUFFICIENT_HISTORY', label: 'COLD START', desc: 'History <5 days', alert: false }
+                ] as { id: string; label: string; desc: string; alert: boolean }[]).map((c) => {
+                  const active = filters.cStatuses.includes(c.id);
+                  return (
+                    <div
+                      key={c.id}
+                      className={`flex items-center justify-between p-1.5 rounded-lg border transition-all ${active && c.alert
+                          ? 'bg-[rgba(244,63,94,0.06)] border-[rgba(244,63,94,0.18)]'
+                          : active
+                            ? 'bg-black/25 border-white/[0.12]'
+                            : 'bg-black/20 border-white/[0.06]'
+                        }`}
+                    >
+                      <div>
+                        <div
+                          className={`text-[10px] font-semibold transition-all ${
+                            active && c.alert
+                              ? 'text-[#fda4af] drop-shadow-[0_0_8px_rgba(244,63,94,0.6)]'
+                              : active
+                              ? 'text-[#89E5FC] drop-shadow-[0_0_8px_rgba(137,229,252,0.6)]'
+                              : 'text-[#64748B]'
+                          }`}
+                        >
+                          {c.label}
+                        </div>
+                        <div className="text-[8px] text-[#475569]">{c.desc}</div>
+                      </div>
+                      <Toggle
+                        checked={active}
+                        onClick={() => toggleArrayItem('cStatuses', c.id)}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </aside>

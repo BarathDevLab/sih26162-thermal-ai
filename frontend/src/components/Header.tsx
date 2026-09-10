@@ -1,180 +1,370 @@
-import {
-  Activity,
-  Layers,
-  Radio,
-  Eye,
-  Box,
-  RotateCcw
-} from 'lucide-react';
-import { HeliosLogo } from './Icons';
-import type { SystemStats, HealthCheck } from '../types/api';
+import React, { useState, useRef, useEffect } from 'react';
+import { PanelLeft, Bell, Settings, Layers, Radio, Satellite, Volume2, VolumeX, X } from 'lucide-react';
+import type { HealthCheck } from '../types/api';
 
 interface HeaderProps {
-  stats: SystemStats | null;
   health: HealthCheck | null;
   mode: 'LIVE' | 'REPLAY';
   onModeChange: (m: 'LIVE' | 'REPLAY') => void;
   is3D: boolean;
   onToggle3D: () => void;
+  basemapMode: 'SATELLITE' | 'DARK';
+  onBasemapChange: (m: 'SATELLITE' | 'DARK') => void;
+  show3DColumns: boolean;
+  onToggle3DColumns: () => void;
+  showSatellites?: boolean;
+  onToggleSatellites?: () => void;
+  showSwaths?: boolean;
+  onToggleSwaths?: () => void;
+  showHeatBloom?: boolean;
+  onToggleHeatBloom?: () => void;
   sseConnected: boolean;
   activeAlertCount: number | null;
+  siteCount?: number;
+  activeRate?: string;
+  industrialCount?: number;
+  alertCount?: number;
+  sidebarOpen?: boolean;
+  onToggleSidebar?: () => void;
+  alertsOpen?: boolean;
+  onToggleAlerts?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
-  stats,
   health,
   mode,
   onModeChange,
   is3D,
   onToggle3D,
+  basemapMode,
+  onBasemapChange,
+  show3DColumns,
+  onToggle3DColumns,
+  showSatellites = true,
+  onToggleSatellites,
+  showSwaths = true,
+  onToggleSwaths,
+  showHeatBloom = true,
+  onToggleHeatBloom,
   sseConnected,
-  activeAlertCount
+  activeAlertCount,
+  siteCount = 42,
+  activeRate = '99.98%',
+  industrialCount = 1408,
+  alertCount = 3,
+  sidebarOpen = true,
+  onToggleSidebar,
+  alertsOpen = true,
+  onToggleAlerts
 }) => {
-  const modelVersion = health?.active_models?.['A_CORE'] || 'UNAVAILABLE';
+  const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
+  const [audioTelemetry, setAudioTelemetry] = useState<boolean>(true);
+  const settingsRef = useRef<HTMLDivElement>(null);
+
   const liveAvailable = health?.status === 'READY' || health?.status === 'DEGRADED_PRITHVI_UNAVAILABLE';
 
+  // Close settings popover when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (settingsRef.current && !settingsRef.current.contains(e.target as Node)) {
+        setSettingsOpen(false);
+      }
+    };
+    if (settingsOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [settingsOpen]);
+
   return (
-    <header className="h-14 bg-[#070a12] border-b border-white/10 px-4 flex items-center justify-between select-none z-30 relative shrink-0">
-      {/* Brand & Mission Identifier */}
-      <div className="flex items-center gap-3">
-        <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-amber-500/20 via-orange-500/25 to-red-600/30 border border-amber-500/40 flex items-center justify-center shadow-[0_0_16px_rgba(245,158,11,0.25)] relative overflow-hidden group">
-          <HeliosLogo className="w-6 h-6 text-amber-400 relative z-10 drop-shadow-[0_0_8px_rgba(245,158,11,0.5)]" />
-          <div className="absolute inset-0 bg-amber-400/10 animate-ping-slow pointer-events-none" />
-          <div className="absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-white/10" />
+    <header
+      className="w-full flex items-center justify-between pointer-events-none select-none px-4 py-2.5 z-30 relative"
+      data-purpose="tactical-stitch-header"
+    >
+      {/* ── Left: Sidebar Toggle + SIH26162 and Tagline in unified tactical glass capsule ── */}
+      <div className="flex items-center gap-2.5 p-1 px-2.5 rounded-full border border-sky-400/30 bg-[#070e1e]/85 backdrop-blur-md font-mono shadow-[0_4px_15px_rgba(0,0,0,0.5)] pointer-events-auto shrink-0">
+        {/* Mission Brand Insignia Emblem */}
+        <div className="flex items-center justify-center w-7 h-7 rounded-full border border-sky-400/40 bg-[#16385c]/60 text-[#89E5FC] shadow-[0_0_10px_rgba(56,189,248,0.3)] shrink-0">
+          <Satellite className="w-3.5 h-3.5 text-[#89E5FC]" />
         </div>
-        <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-sm font-black tracking-widest text-slate-100 uppercase font-mono">
-              SIH26162 <span className="text-amber-400">HELIOS</span>
-            </h1>
-            <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 font-mono border border-amber-500/30 font-bold tracking-wider">
-              THERMAL AI
-            </span>
-            <span className="text-[9px] px-1.5 py-0.5 rounded bg-cyan-500/15 text-cyan-300 font-mono border border-cyan-500/30 tracking-wider">
-              OSIRIS COCKPIT
-            </span>
-          </div>
-          <p className="text-[10.5px] text-slate-400 font-mono tracking-tight flex items-center gap-1.5">
-            <span>Orbital Infrared Early-Warning Command Center</span>
-            <span className="text-slate-600">&bull;</span>
-            <span className="text-emerald-400">VIIRS NOAA-20/21</span>
+
+        <div className="flex flex-col select-none pr-1.5">
+          <h1 className="text-xs font-black tracking-widest text-[#89E5FC] font-mono leading-tight">
+            SIH26162
+          </h1>
+          <p className="text-[8px] tracking-widest text-[#64748B] font-mono uppercase font-semibold">
+            AEROSPACE STRATEGIC TELEMETRY
           </p>
         </div>
       </div>
 
-      {/* Center Telemetry Readouts */}
-      <div className="hidden lg:flex items-center gap-4 bg-[#090e1a]/90 border border-white/10 py-1.5 px-3.5 rounded-lg tactical-glass shadow-lg">
-        <div className="flex items-center gap-1.5">
-          <Layers className="w-3.5 h-3.5 text-cyan-400" />
-          <span className="text-[11px] text-slate-400 font-mono">Sites:</span>
-          <span className="text-xs font-mono font-bold text-white">
-            {stats ? stats.total_sites.toLocaleString() : '—'}
+      {/* ── Center Cluster: Stats Capsule (Wide Screens) + View Switcher ── */}
+      <div className="flex items-center gap-3 pointer-events-auto shrink-0">
+        {/* Stats Capsule (Stitch Spec) */}
+        <div className="hidden 2xl:flex items-center gap-2.5 px-3 py-1 rounded-full border border-sky-400/25 bg-[#070e1e]/85 backdrop-blur-md font-mono text-[10px] text-slate-400 shadow-[0_4px_15px_rgba(0,0,0,0.5)]">
+          <span>SITES: <strong className="text-white font-bold">{siteCount}</strong></span>
+          <span className="text-slate-600">·</span>
+          <span>30D ACTIVE: <strong className="text-white font-bold">{activeRate}</strong></span>
+          <span className="text-slate-600">·</span>
+          <span>INDUSTRIAL: <strong className="text-white font-bold">{industrialCount.toLocaleString()}</strong></span>
+          <span className="text-slate-600">·</span>
+          <span className="flex items-center gap-1.5">
+            <span>ALERTS:</span>
+            <span className="px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[9px] font-bold">
+              {alertCount} CRIT
+            </span>
           </span>
         </div>
 
-        <div className="h-3 w-px bg-white/10" />
+        {/* Projection Mode Capsule: [ 3D Globe | 2D Plane ] */}
+        <div className="flex items-center gap-1 p-1 px-1.5 rounded-full border border-sky-400/30 bg-[#070e1e]/85 backdrop-blur-md font-mono text-xs shadow-[0_4px_15px_rgba(0,0,0,0.5)]">
+          <button
+            onClick={() => {
+              if (!is3D) onToggle3D();
+            }}
+            type="button"
+            className={`px-3 py-1 rounded-full text-xs flex items-center gap-1.5 transition-all cursor-pointer ${
+              is3D
+                ? 'text-white bg-[#16385c]/90 border border-sky-400/60 font-semibold shadow-[0_0_12px_rgba(56,189,248,0.35)]'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            {is3D && (
+              <span className="w-1.5 h-1.5 rounded-full bg-[#89E5FC] shadow-[0_0_6px_#89E5FC] animate-cyan-breathe" />
+            )}
+            <span>3D Globe</span>
+          </button>
 
-        <div className="flex items-center gap-1.5">
-          <Activity className="w-3.5 h-3.5 text-emerald-400" />
-          <span className="text-[11px] text-slate-400 font-mono">30d Active:</span>
-          <span className="text-xs font-mono font-bold text-emerald-400">
-            {stats ? stats.active_sites_30d.toLocaleString() : '—'}
-          </span>
+          <button
+            onClick={() => {
+              if (is3D) onToggle3D();
+            }}
+            type="button"
+            className={`px-3 py-1 rounded-full text-xs flex items-center gap-1.5 transition-all cursor-pointer ${
+              !is3D
+                ? 'text-white bg-[#16385c]/90 border border-sky-400/60 font-semibold shadow-[0_0_12px_rgba(56,189,248,0.35)]'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            {!is3D && (
+              <span className="w-1.5 h-1.5 rounded-full bg-[#89E5FC] shadow-[0_0_6px_#89E5FC] animate-cyan-breathe" />
+            )}
+            <span>2D Plane</span>
+          </button>
         </div>
 
-        <div className="h-3 w-px bg-white/10" />
+        {/* Basemap & Plumes Capsule: [ Satellite View | Black Canvas ] | [ 3D Plumes ] */}
+        <div className="flex items-center gap-1.5 p-1 px-1.5 rounded-full border border-sky-400/30 bg-[#070e1e]/85 backdrop-blur-md font-mono text-xs shadow-[0_4px_15px_rgba(0,0,0,0.5)]">
+          <button
+            onClick={() => onBasemapChange('SATELLITE')}
+            type="button"
+            className={`px-3 py-1 rounded-full text-xs flex items-center gap-1.5 transition-all cursor-pointer ${
+              basemapMode === 'SATELLITE'
+                ? 'text-white bg-[#16385c]/90 border border-sky-400/60 font-semibold shadow-[0_0_12px_rgba(56,189,248,0.35)]'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            {basemapMode === 'SATELLITE' && (
+              <span className="w-1.5 h-1.5 rounded-full bg-[#89E5FC] shadow-[0_0_6px_#89E5FC] animate-cyan-breathe" />
+            )}
+            <span>Satellite View</span>
+          </button>
 
-        <div className="flex items-center gap-1.5">
-          <span className="w-2 h-2 rounded-full bg-amber-400 shadow-[0_0_6px_#f59e0b]" />
-          <span className="text-[11px] text-slate-400 font-mono">Industrial:</span>
-          <span className="text-xs font-mono font-bold text-amber-400">
-            {stats ? (stats.model_a_counts['INDUSTRIAL'] ?? 0).toLocaleString() : '—'}
-          </span>
-        </div>
+          <button
+            onClick={() => onBasemapChange('DARK')}
+            type="button"
+            className={`px-3 py-1 rounded-full text-xs flex items-center gap-1.5 transition-all cursor-pointer ${
+              basemapMode === 'DARK'
+                ? 'text-white bg-[#16385c]/90 border border-sky-400/60 font-semibold shadow-[0_0_12px_rgba(56,189,248,0.35)]'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            {basemapMode === 'DARK' && (
+              <span className="w-1.5 h-1.5 rounded-full bg-[#89E5FC] shadow-[0_0_6px_#89E5FC] animate-cyan-breathe" />
+            )}
+            <span>Black Canvas</span>
+          </button>
 
-        <div className="h-3 w-px bg-white/10" />
-
-        <div className="flex items-center gap-1.5">
-          <Radio className="w-3.5 h-3.5 text-red-400 animate-pulse" />
-          <span className="text-[11px] text-slate-400 font-mono">Active Alerts:</span>
-          <span className="text-xs font-mono font-bold text-red-400">
-            {activeAlertCount === null ? '—' : activeAlertCount}
-          </span>
-        </div>
-
-        <div className="h-3 w-px bg-white/10" />
-
-        <div className="flex items-center gap-1.5">
-          <span className="text-[10px] text-slate-400 font-mono">Stack:</span>
-          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700 font-bold">
-            {modelVersion}
-          </span>
+          {/* 3D Volumetric Plumes - only shown in 3D globe mode */}
+          {is3D && (
+            <>
+              <span className="w-px h-3.5 bg-sky-400/30 mx-0.5" />
+              <button
+                onClick={onToggle3DColumns}
+                type="button"
+                className={`px-3 py-1 rounded-full text-xs flex items-center gap-1.5 transition-all cursor-pointer ${
+                  show3DColumns
+                    ? 'text-[#89E5FC] bg-[#16385c]/90 border border-sky-400/60 font-semibold shadow-[0_0_12px_rgba(56,189,248,0.35)]'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                {show3DColumns && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#89E5FC] shadow-[0_0_6px_#89E5FC] animate-cyan-breathe" />
+                )}
+                <span>3D Plumes</span>
+              </button>
+            </>
+          )}
         </div>
       </div>
 
-      {/* Right Controls: 2D/3D, Mode, SSE Pulse */}
-      <div className="flex items-center gap-2.5">
-        {/* 2D / 3D Geospatial Toggle */}
-        <button
-          onClick={onToggle3D}
-          className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium border transition-all ${
-            is3D
-              ? 'bg-cyan-500/20 border-cyan-400/50 text-cyan-300 shadow-[0_0_10px_rgba(6,182,212,0.3)]'
-              : 'bg-[#111a2e] border-white/10 text-slate-300 hover:border-white/20'
-          }`}
-          title="Toggle 2D Tactical View vs 3D Perspective with FRP Spikes"
-        >
-          <Box className="w-3.5 h-3.5" />
-          <span>{is3D ? '3D PERSPECTIVE' : '2D MAP'}</span>
-        </button>
-
-        {/* Operating Mode Switcher */}
-        <div className="flex bg-[#0c1322] p-0.5 rounded border border-white/10">
+      {/* ── Right Controls: LIVE / REPLAY + Bell + Settings ── */}
+      <div className="flex items-center gap-2 pointer-events-auto shrink-0">
+        {/* Mode Capsule: LIVE vs REPLAY */}
+        <div className="flex items-center gap-1 p-1 px-1.5 rounded-full border border-sky-400/30 bg-[#070e1e]/85 backdrop-blur-md font-mono text-xs shadow-[0_4px_15px_rgba(0,0,0,0.5)]">
           <button
             onClick={() => onModeChange('LIVE')}
             disabled={!liveAvailable}
-            title={liveAvailable ? 'Show the current operational stack' : `Live mode blocked: ${health?.status || 'READINESS UNKNOWN'}`}
-            className={`flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold tracking-wide transition-colors ${
+            type="button"
+            className={`px-3.5 py-1 rounded-full text-xs flex items-center gap-1.5 transition-all cursor-pointer ${
               mode === 'LIVE'
-                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                ? 'text-white bg-[#16385c]/90 border border-sky-400/60 font-semibold shadow-[0_0_12px_rgba(56,189,248,0.35)]'
                 : !liveAvailable
-                ? 'text-slate-600 cursor-not-allowed'
+                ? 'text-[#475569] cursor-not-allowed'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            <Eye className="w-3 h-3" />
-            <span>LIVE</span>
+            {mode === 'LIVE' && (
+              <span className={`w-1.5 h-1.5 rounded-full ${sseConnected ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]' : 'bg-[#89E5FC] shadow-[0_0_6px_#89E5FC]'} animate-cyan-breathe`} />
+            )}
+            LIVE
           </button>
           <button
             onClick={() => onModeChange('REPLAY')}
-            className={`flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold tracking-wide transition-colors ${
+            type="button"
+            className={`px-3.5 py-1 rounded-full text-xs flex items-center gap-1.5 transition-all cursor-pointer ${
               mode === 'REPLAY'
-                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                ? 'text-white bg-[#16385c]/90 border border-sky-400/60 font-semibold shadow-[0_0_12px_rgba(56,189,248,0.35)]'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            <RotateCcw className="w-3 h-3" />
-            <span>REPLAY</span>
+            {mode === 'REPLAY' && (
+              <span className="w-1.5 h-1.5 rounded-full bg-[#89E5FC] shadow-[0_0_6px_#89E5FC] animate-cyan-breathe" />
+            )}
+            REPLAY
           </button>
         </div>
 
-        {/* Real-Time SSE Stream Heartbeat Indicator */}
-        <div
-          className="flex items-center gap-1.5 px-2 py-1 rounded bg-[#0c1322] border border-white/10"
-          title={mode === 'REPLAY' ? 'Historical replay mode' : liveAvailable ? (sseConnected ? 'Connected to live SSE alert stream' : 'Reconnecting to stream...') : `Live mode blocked: ${health?.status || 'READINESS UNKNOWN'}`}
+        {/* Notifications Bell */}
+        <button
+          type="button"
+          onClick={onToggleAlerts}
+          aria-label="Notifications"
+          title="Incident Alerts"
+          className={`w-8 h-8 rounded-full border bg-[#070e1e]/85 backdrop-blur-md flex items-center justify-center transition-all cursor-pointer relative shadow-[0_4px_15px_rgba(0,0,0,0.5)] ${
+            alertsOpen
+              ? 'text-[#89E5FC] border-sky-400/70 bg-[#16385c]/90 shadow-[0_0_12px_rgba(56,189,248,0.35)]'
+              : 'text-slate-300 hover:text-white border-sky-400/25 hover:border-sky-400/50 hover:bg-[#16385c]/50'
+          }`}
         >
-          <span
-            className={`w-2 h-2 rounded-full ${
-              mode === 'REPLAY' || !liveAvailable
-                ? 'bg-slate-500'
-                : sseConnected
-                ? 'bg-emerald-400 shadow-[0_0_8px_#34d399] animate-pulse'
-                : 'bg-amber-400'
+          <Bell className="w-3.5 h-3.5" />
+          {(activeAlertCount ?? 0) > 0 && (
+            <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-rose-500 shadow-[0_0_6px_#f43f5e] animate-pulse" />
+          )}
+        </button>
+
+        {/* Settings Icon & Dropdown Popover */}
+        <div className="relative" ref={settingsRef}>
+          <button
+            type="button"
+            onClick={() => setSettingsOpen(!settingsOpen)}
+            aria-label="System Settings"
+            className={`w-8 h-8 rounded-full border bg-[#070e1e]/85 backdrop-blur-md flex items-center justify-center transition-all cursor-pointer shadow-[0_4px_15px_rgba(0,0,0,0.5)] ${
+              settingsOpen
+                ? 'text-[#89E5FC] border-sky-400/70 bg-[#16385c]/90 shadow-[0_0_12px_rgba(56,189,248,0.35)]'
+                : 'text-slate-300 hover:text-white border-sky-400/25 hover:border-sky-400/50 hover:bg-[#16385c]/50'
             }`}
-          />
-          <span className="text-[10px] font-mono text-slate-300">
-            {mode === 'REPLAY' ? 'REPLAY' : !liveAvailable ? 'BLOCKED' : sseConnected ? 'ONLINE' : 'CONNECTING'}
-          </span>
+          >
+            <Settings className={`w-3.5 h-3.5 transition-transform duration-300 ${settingsOpen ? 'rotate-90 text-[#89E5FC]' : ''}`} />
+          </button>
+
+          {/* Tactical Quick Settings Popover */}
+          {settingsOpen && (
+            <div className="absolute right-0 top-10 w-64 rounded-xl drawer-glass p-3 shadow-[0_12px_35px_rgba(0,0,0,0.9)] border border-sky-400/30 z-50 animate-in fade-in zoom-in-95 duration-150 font-mono text-xs">
+              <div className="flex items-center justify-between pb-2 mb-2 border-b border-white/10">
+                <span className="text-[10px] font-bold text-sky-400 tracking-wider uppercase">
+                  TACTICAL SETTINGS
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setSettingsOpen(false)}
+                  className="text-slate-400 hover:text-white"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              <div className="flex flex-col gap-2.5">
+                {/* Satellite Orbits Toggle */}
+                {onToggleSatellites && (
+                  <label className="flex items-center justify-between cursor-pointer group">
+                    <span className="flex items-center gap-1.5 text-slate-300 group-hover:text-white">
+                      <Satellite className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Satellite Orbits</span>
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={showSatellites}
+                      onChange={onToggleSatellites}
+                      className="accent-sky-400 cursor-pointer"
+                    />
+                  </label>
+                )}
+
+                {/* Sensor Swaths Toggle */}
+                {onToggleSwaths && (
+                  <label className="flex items-center justify-between cursor-pointer group">
+                    <span className="flex items-center gap-1.5 text-slate-300 group-hover:text-white">
+                      <Radio className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Sensor Swaths</span>
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={showSwaths}
+                      onChange={onToggleSwaths}
+                      className="accent-sky-400 cursor-pointer"
+                    />
+                  </label>
+                )}
+
+                {/* Heat Bloom Toggle */}
+                {onToggleHeatBloom && (
+                  <label className="flex items-center justify-between cursor-pointer group">
+                    <span className="flex items-center gap-1.5 text-slate-300 group-hover:text-white">
+                      <Layers className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>Heat Bloom</span>
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={showHeatBloom}
+                      onChange={onToggleHeatBloom}
+                      className="accent-sky-400 cursor-pointer"
+                    />
+                  </label>
+                )}
+
+                {/* Audio Telemetry Toggle */}
+                <label className="flex items-center justify-between cursor-pointer group pt-1 border-t border-white/5">
+                  <span className="flex items-center gap-1.5 text-slate-300 group-hover:text-white">
+                    {audioTelemetry ? (
+                      <Volume2 className="w-3.5 h-3.5 text-sky-400" />
+                    ) : (
+                      <VolumeX className="w-3.5 h-3.5 text-slate-500" />
+                    )}
+                    <span>Audio Chimes</span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={audioTelemetry}
+                    onChange={() => setAudioTelemetry(!audioTelemetry)}
+                    className="accent-sky-400 cursor-pointer"
+                  />
+                </label>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </header>
