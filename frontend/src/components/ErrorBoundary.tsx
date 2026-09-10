@@ -36,7 +36,7 @@ export class ErrorBoundary extends Component<Props, State> {
   public render() {
     if (this.state.hasError) {
       return (
-        <div className="flex flex-col items-center justify-center w-full h-full min-h-[300px] p-6 bg-[#070a12] text-slate-200 border border-red-500/20 rounded-lg">
+        <div className="system-error flex flex-col items-center justify-center w-full h-full min-h-[300px] p-6 text-slate-200 border border-red-500/20">
           <div className="w-12 h-12 rounded-full bg-red-500/10 border border-red-500/30 flex items-center justify-center mb-4 text-red-400">
             <AlertTriangle className="w-6 h-6" />
           </div>
@@ -58,7 +58,7 @@ export class ErrorBoundary extends Component<Props, State> {
             className="flex items-center gap-2 px-3 py-1.5 rounded bg-red-500/20 border border-red-500/40 text-red-300 hover:bg-red-500/30 text-xs font-mono transition-colors cursor-pointer"
           >
             <RefreshCw className="w-3.5 h-3.5" />
-            <span>RELOAD COCKPIT</span>
+            <span>RELOAD INTERFACE</span>
           </button>
         </div>
       );

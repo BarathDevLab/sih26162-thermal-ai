@@ -133,10 +133,17 @@ FIRMS_PRIMARY_SOURCE=VIIRS_NOAA20_NRT
 FIRMS_SECONDARY_SOURCE=VIIRS_NOAA21_NRT
 FIRMS_BBOX=67,6,98,38
 FIRMS_POLL_MINUTES=15
+AUTO_STARTUP_CATCHUP=true
 MODEL_ROOT=backend/models
 MODEL_STACK_VERSION=2026-09-04-r1
 ALLOWED_ORIGINS=http://localhost:3000
 PRITHVI_ENABLED=false
+EARTHDATA_USERNAME=
+EARTHDATA_PASSWORD=
+PRITHVI_DEVICE=auto
+PRITHVI_ALLOW_CPU_FALLBACK=true
+PRITHVI_RETRY_AFTER_MINUTES=60
+HLS_CACHE_DIR=./data/cache/hls
 REPLAY_ENABLED=true
 REPLAY_CACHE_ENABLED=true
 ```
@@ -144,9 +151,20 @@ REPLAY_CACHE_ENABLED=true
 Important configuration behavior:
 
 - `FIRMS_MAP_KEY` is required for live mode and scheduled polling. Keep it secret and never commit `.env`.
-- Leave `PRITHVI_ENABLED=false` for the normal CPU/A-Core setup. Model A-Core, Model B, Model C, live ingestion, and replay continue to work without Prithvi.
-- Enabling Prithvi additionally requires its foundation weights, trained image head/config, Earthdata access, and preferably a CUDA-capable environment.
+- `PRITHVI_ENABLED=false` enables core live operation without visual rescue. Model A-Core, Model B, Model C, FIRMS ingestion, alerts, and replay continue to work.
+- Set `PRITHVI_ENABLED=true` only for full live operation with visit-triggered HLS/Prithvi evaluation. This additionally requires the packaged visual artifacts and NASA Earthdata credentials described below.
+- `PRITHVI_DEVICE=auto` selects CUDA when available and otherwise uses CPU. CPU is supported, but the first inference is slower because the 300M encoder is loaded lazily.
+- Environment changes are read at backend process startup. Restart the backend after modifying `.env`.
 - If the password contains URL-reserved characters such as `@`, `:`, `/`, or `#`, URL-encode it in `DATABASE_URL`.
+
+### Choose the required live capability
+
+| Capability | Required settings | Behavior |
+| --- | --- | --- |
+| **Core live** | Current database, valid `FIRMS_MAP_KEY`, `PRITHVI_ENABLED=false` | Scheduled FIRMS ingestion and A/B/C processing run normally; uncertain Model A sites remain `UNKNOWN` without visual evaluation |
+| **Full live with Prithvi** | Core live requirements, `PRITHVI_ENABLED=true`, Earthdata credentials, and all visual artifacts | Visiting an eligible live `UNKNOWN` site queues genuine HLS retrieval and guarded Prithvi evaluation |
+
+Prithvi is optional for the platform but required for the automatic visual-rescue experience in the site drawer. It never changes a confident A-Core decision and is never launched by historical replay.
 
 ## 3A. Fast database setup from the shared snapshot
 
@@ -275,6 +293,12 @@ Terminal 1 - backend:
 python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
+For a stable live prototype run, omit `--reload` so source-file changes cannot interrupt an active FIRMS or HLS task:
+
+```powershell
+.\.venv\Scripts\python.exe -u -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
+```
+
 Terminal 2 - frontend:
 
 ```powershell
@@ -291,7 +315,83 @@ Open:
 
 On backend startup, the application validates model/config checksums, required database tables and columns, the active model versions, the common A/B/C snapshot, data freshness, and FIRMS credentials. The scheduler starts only after that preflight permits live operation.
 
-## 5. Verify the installation
+## 5. Configure full live HLS/Prithvi evaluation
+
+Skip this section when core live operation without Prithvi is sufficient.
+
+### 5.1 Verify the packaged visual artifacts
+
+Full live Prithvi requires these exact repository files:
+
+```text
+backend/models/prithvi/Prithvi_EO_V2_300M.pt
+backend/models/prithvi/config.json
+backend/models/prithvi/prithvi_mae.py
+backend/models/MODEL_A_PRITHVI_FINAL.joblib
+backend/config/source/prithvi_final_config.json
+```
+
+Their SHA-256 values must also agree with `SHA256SUMS.txt` and `backend/config/active_stack_manifest.json`. Do not retrain, rename, or replace these artifacts during setup.
+
+### 5.2 Add backend-only Earthdata configuration
+
+Create a NASA Earthdata Login account with access to HLS, then set the following values in the root `.env`:
+
+```dotenv
+PRITHVI_ENABLED=true
+EARTHDATA_USERNAME=YOUR_EARTHDATA_USERNAME
+EARTHDATA_PASSWORD=YOUR_EARTHDATA_PASSWORD
+PRITHVI_DEVICE=auto
+PRITHVI_ALLOW_CPU_FALLBACK=true
+PRITHVI_RETRY_AFTER_MINUTES=60
+HLS_CACHE_DIR=./data/cache/hls
+```
+
+Never put Earthdata credentials in frontend environment files, React code, screenshots, or Git. The browser communicates only with FastAPI; Earthdata authentication and imagery retrieval remain server-side.
+
+Restart the backend after saving `.env`. No separate scheduler or Prithvi-worker command is required. When stack readiness permits live operation, backend startup automatically starts both APScheduler and the asynchronous Prithvi worker.
+
+### 5.3 Verify live readiness and workers
+
+```powershell
+$health = Invoke-RestMethod http://127.0.0.1:8000/api/v1/health
+$live = Invoke-RestMethod http://127.0.0.1:8000/api/v1/live/status
+
+$health
+$live.scheduler
+$live.prithvi_queue
+```
+
+Expected state for full live operation:
+
+```text
+health.status                  READY
+health.database                connected
+live.scheduler.is_running      true
+live.prithvi_queue.worker_running true
+```
+
+`DEGRADED_PRITHVI_UNAVAILABLE` still permits core live operation, but visit-triggered visual evaluation will not complete until the reported local artifact/runtime issue is corrected. Local readiness validates the packaged Prithvi runtime; the Earthdata login itself is exercised when the first HLS scene is requested.
+
+### 5.4 What happens when an unknown site is opened
+
+```mermaid
+flowchart LR
+    OPEN[Open live UNKNOWN site] --> BAND{A-Core in<br/>0.405-0.885 band?}
+    BAND -- No --> KEEP[Keep A-Core decision]
+    BAND -- Yes --> QUEUE[Queue HLS/Prithvi]
+    QUEUE --> HLS[Retrieve cloud-screened<br/>HLS patch]
+    HLS --> SCORE[Prithvi probability]
+    SCORE --> RESCUE{Score >= 0.965?}
+    RESCUE -- Yes --> INDUSTRIAL[UNKNOWN to INDUSTRIAL<br/>guarded rescue]
+    RESCUE -- No --> UNKNOWN[Remain UNKNOWN<br/>show visual score]
+```
+
+The drawer displays `PENDING` and refreshes from the persisted server result. Closing the drawer does not cancel processing. Successful output is stored in PostgreSQL and the compact HLS patch is cached under `HLS_CACHE_DIR`; reopening the site reuses that evidence. Cloud-rejected or unavailable imagery remains explicitly unavailable—no score is fabricated.
+
+HLS search and first-time CPU inference can take tens of seconds depending on Earthdata latency and hardware. Retrieval checks the small cloud mask first, stops at the first valid scene, removes full GeoTIFF staging files, and retains only the compact site patch. Later evaluations in the same backend process avoid reloading the Prithvi encoder.
+
+## 6. Verify the installation
 
 Run the backend and frontend checks before handing off a setup:
 

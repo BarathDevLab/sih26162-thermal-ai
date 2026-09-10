@@ -7,7 +7,7 @@ interface IconProps {
 
 /**
  * SIH26162 HELIOS Primary Brand Emblem
- * An orbital satellite ring traversing a precision infrared sensor aperture with a radiant thermal core.
+ * A sensor ring traversing a precision infrared aperture with a radiant thermal core.
  */
 export const HeliosLogo: React.FC<IconProps> = ({ className = 'w-6 h-6', size = 24 }) => (
   <svg
@@ -145,7 +145,7 @@ export const ResolverIcon: React.FC<IconProps> = ({ className = 'w-4 h-4', size 
 
 /**
  * Decision Engine Glyph
- * Tactical operational shield escutcheon with incident targeting reticle.
+ * Operational decision shield with a priority marker.
  */
 export const DecisionEngineIcon: React.FC<IconProps> = ({ className = 'w-4 h-4', size = 16 }) => (
   <svg width={size} height={size} viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>

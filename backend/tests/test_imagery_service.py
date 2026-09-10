@@ -2,6 +2,7 @@
 
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -62,6 +63,85 @@ def test_cloudy_hls_patch_is_rejected_without_probability():
     )
     with pytest.raises(HLSCloudRejected):
         patch.validate()
+
+
+def test_hls_rejects_cloudy_scene_before_large_band_download(monkeypatch, tmp_path):
+    service = HLSService(cache_dir=str(tmp_path))
+    calls = []
+
+    class FakeEarthaccess:
+        @staticmethod
+        def download(urls, local_path, threads, show_progress):
+            calls.append(list(urls))
+            paths = []
+            for url in urls:
+                path = Path(local_path) / Path(url).name
+                path.touch()
+                paths.append(str(path))
+            return paths
+
+    class FakeGranule:
+        @staticmethod
+        def data_links():
+            return [
+                f"https://example.test/HLS.S30.2026002T000000.v2.0.{band}.tif"
+                for band in (*("B02", "B03", "B04", "B8A", "B11", "B12"), "Fmask")
+            ]
+
+    monkeypatch.setattr(
+        service,
+        "_read_centered_band",
+        lambda path, latitude, longitude, reflectance: np.full((224, 224), 1, dtype=np.uint8),
+    )
+
+    with pytest.raises(HLSCloudRejected):
+        service._download_and_extract(
+            FakeEarthaccess(), FakeGranule(), "HLSS30", "SITE_A", 20.0, 75.0, date(2026, 1, 2)
+        )
+
+    assert len(calls) == 1
+    assert len(calls[0]) == 1
+    assert ".Fmask.tif" in calls[0][0]
+    assert list((tmp_path / "_earthdata" / "SITE_A").iterdir()) == []
+
+
+def test_hls_clear_scene_downloads_bands_then_removes_staging(monkeypatch, tmp_path):
+    service = HLSService(cache_dir=str(tmp_path))
+    calls = []
+
+    class FakeEarthaccess:
+        @staticmethod
+        def download(urls, local_path, threads, show_progress):
+            calls.append(list(urls))
+            paths = []
+            for url in urls:
+                path = Path(local_path) / Path(url).name
+                path.touch()
+                paths.append(str(path))
+            return paths
+
+    class FakeGranule:
+        @staticmethod
+        def data_links():
+            return [
+                f"https://example.test/HLS.S30.2026002T000000.v2.0.{band}.tif"
+                for band in (*("B02", "B03", "B04", "B8A", "B11", "B12"), "Fmask")
+            ]
+
+    def fake_read(path, latitude, longitude, reflectance):
+        dtype = np.float32 if reflectance else np.uint8
+        return np.zeros((224, 224), dtype=dtype)
+
+    monkeypatch.setattr(service, "_read_centered_band", fake_read)
+    patch = service._download_and_extract(
+        FakeEarthaccess(), FakeGranule(), "HLSS30", "SITE_A", 20.0, 75.0, date(2026, 1, 2)
+    )
+
+    assert patch.bands.shape == (6, 224, 224)
+    assert len(calls) == 2
+    assert len(calls[0]) == 1
+    assert len(calls[1]) == 6
+    assert list((tmp_path / "_earthdata" / "SITE_A").iterdir()) == []
 
 
 def _clear_patch() -> HLSPatch:

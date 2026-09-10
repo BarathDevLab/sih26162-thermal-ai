@@ -86,6 +86,7 @@ export default function App() {
   const sitesCache = useRef<Map<string, SiteGeoJSONFeatureCollection>>(new Map());
   const [selectedSiteId, setSelectedSiteId] = useState<string | null>(null);
   const [selectedSite, setSelectedSite] = useState<SiteDetail | null>(null);
+  const selectedSiteRequestId = useRef(0);
 
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const [sseConnected, setSseConnected] = useState<boolean>(false);
@@ -245,6 +246,16 @@ export default function App() {
     };
   }, [currentBBox, loadSites]);
 
+  const refreshSelectedSite = useCallback(async (siteId: string, asOfDate?: string) => {
+    const requestId = ++selectedSiteRequestId.current;
+    const detail = await fetchSiteDetail(siteId, asOfDate);
+    if (requestId !== selectedSiteRequestId.current) {
+      return detail;
+    }
+    setSelectedSite(detail);
+    return detail;
+  }, []);
+
   // 4. Load Detailed Site Intelligence when a site is selected
   useEffect(() => {
     let active = true;
@@ -254,20 +265,18 @@ export default function App() {
     }
 
     const cutoff = mode === 'REPLAY' ? replayDate : undefined;
-    fetchSiteDetail(selectedSiteId, cutoff)
-      .then((detail) => {
-        if (active) {
-          setSelectedSite(detail);
-        }
-      })
-      .catch((err) => {
-        console.error(`Failed to fetch site ${selectedSiteId}:`, err);
+    queueMicrotask(() => {
+      if (!active) return;
+      refreshSelectedSite(selectedSiteId, cutoff).catch((err) => {
+        if (active) console.error(`Failed to fetch site ${selectedSiteId}:`, err);
       });
+    });
 
     return () => {
       active = false;
+      selectedSiteRequestId.current += 1;
     };
-  }, [selectedSiteId, mode, replayDate]);
+  }, [selectedSiteId, mode, replayDate, refreshSelectedSite]);
 
   // Jump to site action from alert feed
   const handleJumpToSite = (siteId: string, lat?: number, lon?: number) => {
@@ -478,6 +487,7 @@ export default function App() {
           <SiteDrawer
             site={selectedSite?.site_id === selectedSiteId ? selectedSite : null}
             asOfDate={mode === 'REPLAY' ? replayDate : undefined}
+            onRefreshSite={refreshSelectedSite}
             onClose={() => setSelectedSiteId(null)}
           />
         </div>

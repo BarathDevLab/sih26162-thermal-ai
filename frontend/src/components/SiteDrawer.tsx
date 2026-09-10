@@ -1,9 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import {
-  X, MapPin, Eye
+  X,
+  Layers,
+  Satellite,
+  Table,
+  ExternalLink,
+  MapPin,
+  Eye,
+  Sparkles,
+  ShieldCheck,
+  Hexagon,
+  Clock,
+  Activity
 } from 'lucide-react';
 import {
-  ResolverIcon,
   DecisionEngineIcon
 } from './Icons';
 import type {
@@ -23,171 +33,190 @@ import {
 interface SiteDrawerProps {
   site: SiteDetail | null;
   asOfDate?: string;
+  onRefreshSite: (siteId: string, asOfDate?: string) => Promise<SiteDetail>;
   onClose: () => void;
 }
 
 type TabType = 'OVERVIEW' | 'TIMELINE' | 'EVIDENCE' | 'SATELLITE' | 'RAW_FIRMS';
 
-const TABS: { id: TabType; label: string }[] = [
-  { id: 'OVERVIEW',  label: 'Overview' },
-  { id: 'TIMELINE',  label: 'Timeline' },
-  { id: 'EVIDENCE',  label: 'Evidence' },
-  { id: 'SATELLITE', label: 'Satellite' },
-  { id: 'RAW_FIRMS', label: 'Detections' }
-];
+const PRITHVI_STATUS_POLL_MS = 4_000;
+const PRITHVI_STATUS_POLL_LIMIT_MS = 10 * 60_000;
 
-export const SiteDrawer: React.FC<SiteDrawerProps> = ({ site, asOfDate, onClose }) => {
+export const SiteDrawer: React.FC<SiteDrawerProps> = ({ site, asOfDate, onRefreshSite, onClose }) => {
   const [activeTab, setActiveTab] = useState<TabType>('OVERVIEW');
-  const [timelineData, setTimelineData]   = useState<SiteTimelineResponse | null>(null);
-  const [evidenceData, setEvidenceData]   = useState<SiteEvidenceResponse | null>(null);
+  const [timelineData, setTimelineData] = useState<SiteTimelineResponse | null>(null);
+  const [evidenceData, setEvidenceData] = useState<SiteEvidenceResponse | null>(null);
   const [detectionsData, setDetectionsData] = useState<SiteDetectionsResponse | null>(null);
-  const [imageryData, setImageryData]     = useState<ImageryCacheSummary[]>([]);
-  const [loading, setLoading]             = useState<boolean>(false);
+  const [imageryData, setImageryData] = useState<ImageryCacheSummary[]>([]);
+  const [loading, setLoading] = useState<boolean>(false);
 
   const siteId = site?.site_id;
 
   useEffect(() => {
     if (!siteId) return;
+
     let active = true;
-    setLoading(true);
+    queueMicrotask(() => {
+      if (active) setLoading(true);
+    });
 
     Promise.allSettled([
       fetchSiteTimeline(siteId, asOfDate),
       fetchSiteEvidence(siteId, 5000, asOfDate),
       fetchSiteDetections(siteId, asOfDate),
       fetchSiteImagery(siteId, asOfDate)
-    ]).then(([timeline, evidence, detections, imagery]) => {
+    ]).then(async ([timeline, evidence, detections, imagery]) => {
       if (!active) return;
-      if (timeline.status   === 'fulfilled') setTimelineData(timeline.value);
-      if (evidence.status   === 'fulfilled') setEvidenceData(evidence.value);
+      if (timeline.status === 'fulfilled') setTimelineData(timeline.value);
+      if (evidence.status === 'fulfilled') setEvidenceData(evidence.value);
       if (detections.status === 'fulfilled') setDetectionsData(detections.value);
-      if (imagery.status    === 'fulfilled') setImageryData(imagery.value);
+      if (imagery.status === 'fulfilled') setImageryData(imagery.value);
       setLoading(false);
+
+      if (asOfDate === undefined) {
+        try {
+          await onRefreshSite(siteId);
+        } catch (error) {
+          console.error(`Failed to refresh Model A status for ${siteId}:`, error);
+        }
+      }
     });
 
-    return () => { active = false; };
-  }, [siteId, asOfDate]);
+    return () => {
+      active = false;
+    };
+  }, [siteId, asOfDate, onRefreshSite]);
+
+  const prithviStatus = site?.model_a?.prithvi_status;
+
+  useEffect(() => {
+    if (!siteId || asOfDate !== undefined || prithviStatus !== 'PENDING') return;
+
+    let active = true;
+    let timer: number | undefined;
+    const deadline = Date.now() + PRITHVI_STATUS_POLL_LIMIT_MS;
+
+    const poll = async () => {
+      const [imagery, detail] = await Promise.allSettled([
+        fetchSiteImagery(siteId),
+        onRefreshSite(siteId)
+      ]);
+      if (!active) return;
+
+      if (imagery.status === 'fulfilled') setImageryData(imagery.value);
+      if (detail.status === 'fulfilled' && detail.value.model_a?.prithvi_status === 'PENDING' && Date.now() < deadline) {
+        timer = window.setTimeout(poll, PRITHVI_STATUS_POLL_MS);
+      }
+    };
+
+    timer = window.setTimeout(poll, 1_500);
+    return () => {
+      active = false;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [siteId, asOfDate, prithviStatus, onRefreshSite]);
 
   if (!site) return null;
 
-  const activePrithviProb   = site.model_a?.prithvi_probability ?? (imageryData[0]?.prithvi_probability ?? null);
-  const activePrithviStatus = site.model_a?.prithvi_status ?? imageryData[0]?.status ?? 'UNAVAILABLE';
-  const activePrithviValue  = activePrithviProb !== null
+  const availableImagery = imageryData.find((item) => item.prithvi_probability !== null);
+  const activePrithviProb = site.model_a?.prithvi_probability ?? availableImagery?.prithvi_probability ?? null;
+  const activePrithviStatus = site.model_a?.prithvi_status === 'PENDING'
+    ? 'PENDING'
+    : activePrithviProb !== null
+    ? 'AVAILABLE'
+    : site.model_a?.prithvi_status ?? imageryData[0]?.status ?? 'UNAVAILABLE';
+  const activePrithviValue = activePrithviProb !== null
     ? `${(activePrithviProb * 100).toFixed(1)}%`
     : activePrithviStatus === 'PENDING' ? 'PENDING' : 'N/A';
-
-  /* ─── Card shell — exact Stitch spec ─── */
-  const card = 'bg-[#060c18]/70 rounded-xl p-3.5 border border-white/[0.08] hover:border-white/[0.12] transition-colors';
-
-  /* ─── Status badge variants ─── */
-  const getBadgeClass = (status: string) => {
-    const alerts = ['CRITICAL', 'ANOMALOUS'];
-    if (alerts.includes(status))
-      return 'px-2 py-0.5 text-[10px] font-mono uppercase tracking-wider font-semibold rounded bg-[rgba(244,63,94,0.12)] text-[#fda4af] border border-[rgba(244,63,94,0.25)]';
-    if (['REACTIVATED', 'NEW', 'PERSISTENT', 'ELEVATED'].includes(status))
-      return 'px-2 py-0.5 text-[10px] font-mono uppercase tracking-wider font-semibold rounded bg-cyan-950/60 text-cyan-300 border border-cyan-700/50';
-    return 'px-2 py-0.5 text-[10px] font-mono uppercase tracking-wider font-semibold rounded bg-[#091322] text-slate-300 border border-slate-700/80';
-  };
+  const prithviRescued = site.model_a?.decision === 'INDUSTRIAL_PRITHVI_RESCUE';
+  const prithviPending = activePrithviStatus === 'PENDING';
 
   return (
-    <aside
-      className="w-[385px] max-w-[calc(100vw-1.5rem)] max-h-full flex flex-col drawer-glass overflow-hidden select-none font-sans antialiased shadow-2xl"
-      data-purpose="tactical-detail-panel"
-      id="tactical-inspector"
-    >
-      {/* ── Header ── */}
-      <header className="p-4 pb-0" data-purpose="header-section">
-        <div className="flex items-start justify-between gap-3">
-          {/* Site identity */}
-          <div className="space-y-1.5 min-w-0">
-            <div className="flex items-center gap-2 flex-wrap">
-              <h1 className="text-sm font-semibold tracking-wide text-white uppercase font-mono truncate">
-                {site.site_id}
-              </h1>
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono font-medium tracking-wider bg-[#89E5FC]/10 text-[#89E5FC] border border-[#89E5FC]/25 shrink-0">
-                <ResolverIcon className="w-2.5 h-2.5" />
-                750m RESOLVER
+    <aside className="w-[420px] max-w-[calc(100vw-32px)] flex flex-col h-full z-20 shrink-0 text-xs overflow-hidden select-none bg-[#070d19]/95 backdrop-blur-xl rounded-2xl border border-sky-500/20 shadow-[0_20px_60px_rgba(0,0,0,0.85)] font-mono">
+      {/* ── Fixed Header Bar ── */}
+      <div className="p-4 border-b border-sky-500/15 bg-[#070e1a]/80 backdrop-blur-md flex items-start justify-between gap-3 shrink-0">
+        <div className="space-y-1 min-w-0 flex-1">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="font-mono text-sm font-bold text-white tracking-wide truncate max-w-[210px]" title={site.site_id}>
+              {site.site_id}
+            </span>
+            <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-sky-950/60 text-cyan-300 border border-sky-500/40 shrink-0">
+              750m RESOLVER
+            </span>
+            {loading && (
+              <span className="text-[9px] text-cyan-400 animate-pulse font-mono shrink-0">
+                SYNCING
               </span>
-              {loading && (
-                <span className="text-[9px] font-mono text-[#89E5FC] animate-pulse tracking-widest">SYNCING…</span>
-              )}
-            </div>
-
-            <div className="flex items-center gap-1.5 text-[11px] text-slate-300 font-mono tracking-tight flex-wrap">
-              <MapPin className="w-3.5 h-3.5 text-rose-500 shrink-0" />
-              <span>{site.latitude.toFixed(4)}&deg;N, {site.longitude.toFixed(4)}&deg;E</span>
-              {asOfDate && (
-                <>
-                  <span className="text-white/20">•</span>
-                  <span className="px-1.5 py-0.5 text-[9px] font-mono rounded bg-white/[0.06] text-slate-400 border border-white/[0.08] tracking-wider">
-                    AS OF {asOfDate}
-                  </span>
-                </>
-              )}
-            </div>
+            )}
           </div>
-
-          {/* Close button */}
-          <button
-            onClick={onClose}
-            aria-label="Close panel"
-            type="button"
-            className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors focus:outline-none cursor-pointer shrink-0"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          <div className="text-xs text-slate-400 font-mono flex items-center gap-1.5">
+            <span className="text-rose-400 text-sm leading-none">📍</span>
+            <span>{site.latitude.toFixed(4)}°N, {site.longitude.toFixed(4)}°E</span>
+          </div>
         </div>
 
-        {/* Tab nav — Stitch pill buttons */}
-        <nav
-          aria-label="Inspector modules"
-          className="flex items-center gap-1.5 mt-3 pb-2.5 overflow-x-auto no-scrollbar"
-          data-purpose="tab-navigation"
+        <button
+          onClick={onClose}
+          className="w-6 h-6 rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors flex items-center justify-center cursor-pointer shrink-0 mt-0.5"
+          title="Close Drawer"
+          type="button"
         >
-          {TABS.map(({ id, label }) => {
-            const active = activeTab === id;
-            return (
-              <button
-                key={id}
-                onClick={() => setActiveTab(id)}
-                className={`px-3 py-1 text-xs rounded-lg transition-all whitespace-nowrap cursor-pointer shrink-0 font-medium ${
-                  active
-                    ? 'bg-[#0e2a40]/90 text-[#89E5FC] border border-[#89E5FC]/40 font-semibold shadow-[0_0_12px_rgba(137,229,252,0.18)]'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.04]'
-                }`}
-              >
-                {label}
-              </button>
-            );
-          })}
-        </nav>
-      </header>
+          <X className="w-4 h-4" />
+        </button>
+      </div>
 
-      {/* ── Content ── */}
-      <div
-        className="p-4 space-y-3 overflow-y-auto flex-1 custom-scrollbar"
-        data-purpose="telemetry-cards-container"
-        style={{ scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.15) rgba(18,22,31,0.5)' }}
-      >
+      {/* ── Minimal Tactical Pill Tabs ── */}
+      <div className="flex items-center gap-2 px-4 py-2 border-b border-sky-500/15 bg-[#050a14]/60 shrink-0 overflow-x-auto no-scrollbar font-mono text-xs">
+        {[
+          { id: 'OVERVIEW', label: 'Overview' },
+          { id: 'TIMELINE', label: 'Timeline' },
+          { id: 'EVIDENCE', label: 'Evidence' },
+          { id: 'SATELLITE', label: 'Satellite' },
+          { id: 'RAW_FIRMS', label: 'Detections' }
+        ].map((tab) => {
+          const isActive = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id as TabType)}
+              type="button"
+              className={`px-3 py-1 rounded-full text-xs font-medium transition-all cursor-pointer shrink-0 ${
+                isActive
+                  ? 'text-white bg-[#0c1c2e] border border-sky-400/50 shadow-[0_0_12px_rgba(56,189,248,0.25)] font-semibold'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-white/5 border border-transparent'
+              }`}
+            >
+              {tab.label}
+            </button>
+          );
+        })}
+      </div>
 
-        {/* ══ OVERVIEW ══ */}
+      {/* ── Tab Content Area ── */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
+
+        {/* ══ TAB 1: OVERVIEW ══ */}
         {activeTab === 'OVERVIEW' && (
-          <>
-            {/* Alert banner */}
+          <div className="space-y-3">
+            {/* Active Alert Banner if Present */}
             {site.active_alert && (
-              <div className="p-3.5 rounded-xl bg-[rgba(244,63,94,0.08)] border border-[rgba(244,63,94,0.22)] space-y-2 mb-2">
+              <div className="p-3 rounded-xl bg-rose-950/30 border border-rose-500/40 space-y-1.5 shadow-[0_0_14px_rgba(244,63,94,0.15)]">
                 <div className="flex items-center justify-between">
-                  <span className="flex items-center gap-1.5 px-2 py-0.5 text-[10px] font-mono uppercase tracking-wider font-semibold rounded bg-[rgba(244,63,94,0.15)] text-[#fda4af] border border-[rgba(244,63,94,0.25)]">
-                    <DecisionEngineIcon className="w-3 h-3" />
-                    {site.active_alert.alert_level} INCIDENT
+                  <span className="chip chip-alert text-[8.5px] flex items-center gap-1 font-bold">
+                    <DecisionEngineIcon className="w-3 h-3 text-rose-400" />
+                    {site.active_alert.alert_level} PRIORITY
                   </span>
-                  <span className="text-[10px] font-mono text-slate-500">{site.active_alert.alert_type}</span>
+                  <span className="text-[9px] text-rose-300/80 font-mono">
+                    {site.active_alert.alert_type}
+                  </span>
                 </div>
-                <p className="text-xs text-slate-300 font-mono leading-relaxed">{site.active_alert.headline}</p>
-                {(site.active_alert.reason_codes ?? []).length > 0 && (
-                  <div className="flex flex-wrap gap-1 pt-1">
-                    {(site.active_alert.reason_codes ?? []).map((code) => (
-                      <span key={code} className="px-1.5 py-0.5 text-[9px] font-mono rounded bg-white/[0.06] text-slate-400 border border-white/[0.08]">
+                <div className="font-semibold text-slate-100 text-[11.5px] leading-snug">
+                  {site.active_alert.headline}
+                </div>
+                {site.active_alert.reason_codes && site.active_alert.reason_codes.length > 0 && (
+                  <div className="flex flex-wrap gap-1 pt-0.5">
+                    {site.active_alert.reason_codes.map((code) => (
+                      <span key={code} className="text-[8.5px] px-1.5 py-0.5 rounded bg-black/50 text-slate-300 border border-white/10 font-mono">
                         {code}
                       </span>
                     ))}
@@ -196,274 +225,470 @@ export const SiteDrawer: React.FC<SiteDrawerProps> = ({ site, asOfDate, onClose 
               </div>
             )}
 
-            {/* ─ Model A ─ */}
-            <section className={card} data-purpose="model-a-card">
-              <div className="flex items-center justify-between gap-2 pb-2.5 mb-2.5 border-b border-white/[0.06]">
-                <div className="flex items-center gap-2">
-                  <svg className="w-4 h-4 text-amber-400 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                    <polygon points="12 2 21 7.5 21 16.5 12 22 3 16.5 3 7.5 12 2" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                  <h2 className="text-xs font-semibold tracking-wider text-slate-200 uppercase font-mono">
-                    Model A: Source Identity
-                  </h2>
-                </div>
-                <span className={getBadgeClass(site.model_a?.class_name || 'UNKNOWN')}>
-                  {site.model_a?.class_name || 'Unknown'}
+            {/* Model A Intelligence Card */}
+            <div className="p-3.5 rounded-xl bg-[#08101d]/90 border border-sky-500/20 space-y-3 shadow-md">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2 font-mono">
+                  <Hexagon className="w-4 h-4 text-amber-400 stroke-[1.75]" />
+                  MODEL A: SOURCE IDENTITY
+                </span>
+                <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded border ${
+                  site.model_a?.class_name === 'INDUSTRIAL'
+                    ? 'bg-amber-950/40 text-amber-300 border-amber-500/40'
+                    : site.model_a?.class_name === 'NONINDUSTRIAL'
+                    ? 'bg-emerald-950/40 text-emerald-300 border-emerald-500/40'
+                    : 'bg-sky-950/40 text-slate-300 border-sky-500/30'
+                }`}>
+                  {site.model_a?.class_name || 'UNKNOWN'}
                 </span>
               </div>
 
-              <div className="grid grid-cols-2 gap-3 my-2 text-xs">
-                <div>
-                  <div className="text-[11px] text-slate-400 mb-0.5">A-Core Probability:</div>
-                  <div className="text-sm font-semibold text-white font-mono">
-                    {site.model_a?.core_probability != null
+              <div className="space-y-2 text-xs font-mono">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-300">A-Core Probability:</span>
+                  <span className="font-bold text-white">
+                    {site.model_a?.core_probability !== null && site.model_a?.core_probability !== undefined
                       ? `${(site.model_a.core_probability * 100).toFixed(1)}%`
-                      : '45.0%'}
-                  </div>
+                      : 'N/A'}
+                  </span>
                 </div>
-                <div>
-                  <div className="text-[11px] text-slate-400 mb-0.5">Prithvi Visual Score:</div>
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-sm font-semibold text-[#89E5FC] font-mono">{activePrithviValue}</span>
-                    <span className="px-1.5 py-0.5 text-[9px] font-mono font-medium rounded bg-teal-950/60 text-teal-300 border border-teal-700/50">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-300">Prithvi Visual Score:</span>
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-white">
+                      {activePrithviValue}
+                    </span>
+                    <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded border ${
+                      activePrithviStatus === 'AVAILABLE' || activePrithviStatus === 'EVALUATED'
+                        ? 'bg-sky-950/60 text-cyan-300 border-sky-400/40'
+                        : activePrithviStatus === 'PENDING'
+                        ? 'bg-amber-950/60 text-amber-300 border-amber-400/40 animate-pulse'
+                        : 'bg-slate-900/60 text-slate-400 border-slate-700/40'
+                    }`}>
                       {activePrithviStatus}
                     </span>
                   </div>
                 </div>
               </div>
 
+              {prithviPending && (
+                <div className="prithvi-progress-row" role="status" aria-live="polite">
+                  <span className="prithvi-progress-orbit" aria-hidden="true" />
+                  <span className="text-[9.5px]">
+                    VISUAL EVALUATION QUEUED
+                    <small>Retrieving genuine HLS evidence; card refreshes automatically.</small>
+                  </span>
+                </div>
+              )}
+              {prithviRescued && (
+                <div className="prithvi-rescue-row" role="status" aria-live="polite">
+                  <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                  <span className="text-[10px] text-amber-300 font-bold">UNKNOWN → INDUSTRIAL · PRITHVI RESCUE VERIFIED</span>
+                </div>
+              )}
+
               <button
                 onClick={() => setActiveTab('SATELLITE')}
                 type="button"
-                className="w-full mt-2.5 flex items-center justify-center gap-2 py-2 px-3 text-xs font-medium tracking-wide text-[#89E5FC] bg-[#0c1c32]/80 hover:bg-[#112948] border border-cyan-700/40 rounded-lg transition-all cursor-pointer"
-                data-purpose="action-inspect-satellite"
+                className="w-full py-2 px-3 rounded-lg bg-[#0b1b2d] hover:bg-[#102742] border border-sky-500/30 text-sky-200 text-xs font-mono font-medium text-center transition-all cursor-pointer flex flex-col items-center justify-center gap-0.5 shadow-sm"
               >
-                <Eye className="w-3.5 h-3.5" />
                 <span>Inspect Satellite Photo &amp; Prithvi Breakdown</span>
-                <span aria-hidden="true">&#8594;</span>
+                <span className="text-sm leading-none">➔</span>
               </button>
-            </section>
+            </div>
 
-            {/* ─ Model B ─ */}
-            <section className={card} data-purpose="model-b-card">
-              <div className="flex items-center justify-between gap-2 pb-2.5 mb-2 border-b border-white/[0.06]">
-                <div className="flex items-center gap-2">
-                  <svg className="w-4 h-4 text-cyan-400 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.75" viewBox="0 0 24 24">
-                    <path d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                  <h2 className="text-xs font-semibold tracking-wider text-slate-200 uppercase font-mono">
-                    Model B: Recurrence Engine
-                  </h2>
-                </div>
-                <span className={getBadgeClass(site.model_b?.state || 'REACTIVATED')}>
-                  {site.model_b?.state || 'Reactivated'}
+            {/* Model B Intelligence Card */}
+            <div className="p-3.5 rounded-xl bg-[#08101d]/90 border border-sky-500/20 space-y-2.5 shadow-md">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2 font-mono">
+                  <Clock className="w-4 h-4 text-cyan-400 stroke-[1.75]" />
+                  MODEL B: RECURRENCE ENGINE
+                </span>
+                <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-sky-950/40 text-cyan-300 border border-sky-500/30">
+                  {site.model_b?.state || 'REACTIVATED'}
                 </span>
               </div>
 
-              <p className="text-xs text-slate-400 font-mono mb-2.5">
-                {site.model_b?.reason || 'Returned within 30d after >=90d inactive gap'}
-              </p>
-
-              {/* Temporal history grid — exact Stitch spec */}
-              <div className="grid grid-cols-4 gap-2 text-center" data-purpose="temporal-history-grid">
-                {['30', '90', '180', '365'].map((w) => (
-                  <div key={w} className="p-2 rounded-lg bg-[#060c18]/80 border border-slate-800/90">
-                    <span className="block text-[10px] font-mono text-slate-400 mb-0.5">{w}d</span>
-                    <span className="text-xs font-semibold font-mono text-white">
-                      {site.model_b?.active_days_windows?.[w] ?? 0}d
-                    </span>
-                  </div>
-                ))}
+              <div className="text-xs text-slate-300 leading-relaxed font-mono">
+                {site.model_b?.reason || 'Calculated deterministically based on observation windows.'}
               </div>
-            </section>
 
-            {/* ─ Model C ─ */}
-            <section className={card} data-purpose="model-c-card">
-              <div className="flex items-center justify-between gap-2 pb-2.5 mb-2.5 border-b border-white/[0.06]">
-                <div className="flex items-center gap-2">
-                  <svg className="w-4 h-4 text-slate-300 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.75" viewBox="0 0 24 24">
-                    <path d="M3.75 3v11.25A2.25 2.25 0 006 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0118 16.5h-2.25m-7.5 0h7.5m-7.5 0l-1 3m8.5-3l1 3m0 0l.5 1.5m-.5-1.5h-9.5m0 0l-.5 1.5m.75-9l3-3 2.25 2.25L15 6" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                  <h2 className="text-xs font-semibold tracking-wider text-slate-200 uppercase font-mono">
-                    Model C: Anomaly Engine
-                  </h2>
-                </div>
-                <span className={
-                  ['CRITICAL', 'ANOMALOUS'].includes(site.model_c?.operational_status || '')
-                    ? getBadgeClass(site.model_c!.operational_status)
-                    : 'px-2 py-0.5 text-[10px] font-mono uppercase tracking-wider font-semibold rounded bg-teal-950/60 text-teal-300 border border-teal-700/50'
-                }>
+              <div className="grid grid-cols-4 gap-2 pt-1 font-mono">
+                {[
+                  { label: '30d', key: '30' },
+                  { label: '90d', key: '90' },
+                  { label: '180d', key: '180' },
+                  { label: '365d', key: '365' }
+                ].map(({ label, key }) => {
+                  const val = site.model_b?.active_days_windows
+                    ? (site.model_b.active_days_windows[label] ?? site.model_b.active_days_windows[key] ?? 0)
+                    : 0;
+                  return (
+                    <div key={label} className="py-2.5 px-2 rounded-lg bg-[#050c17] border border-sky-500/20 text-center flex flex-col items-center justify-center">
+                      <span className="text-[10px] text-slate-400 font-mono">{label}</span>
+                      <span className="text-xs font-bold text-white font-mono mt-0.5">{val}d</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Model C Intelligence Card */}
+            <div className="p-3.5 rounded-xl bg-[#08101d]/90 border border-sky-500/20 space-y-3 shadow-md">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2 font-mono">
+                  <Activity className="w-4 h-4 text-rose-400 stroke-[1.75]" />
+                  MODEL C: ANOMALY ENGINE
+                </span>
+                <span className={`text-[9.5px] font-mono font-bold px-2 py-0.5 rounded border ${
+                  site.model_c?.operational_status === 'CRITICAL'
+                    ? 'bg-rose-950/40 text-rose-300 border-rose-500/40'
+                    : site.model_c?.operational_status === 'ANOMALOUS'
+                    ? 'bg-orange-950/40 text-orange-300 border-orange-500/40'
+                    : site.model_c?.operational_status === 'NORMAL'
+                    ? 'bg-emerald-950/40 text-emerald-300 border-emerald-500/40'
+                    : 'bg-emerald-950/40 text-emerald-400 border-emerald-500/40'
+                }`}>
                   {site.model_c?.operational_status || 'INSUFFICIENT_HISTORY'}
                 </span>
               </div>
 
-              <div className="grid grid-cols-2 gap-3 text-xs">
-                <div>
-                  <div className="text-[11px] text-slate-400 mb-0.5">Anomaly Score:</div>
-                  <div className="text-sm font-semibold text-slate-300 font-mono">
-                    {site.model_c?.c_score != null ? `${(site.model_c.c_score * 100).toFixed(1)}%` : 'N/A'}
-                  </div>
+              <div className="space-y-2 text-xs font-mono">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-300">Anomaly Score:</span>
+                  <span className="font-bold text-amber-400">
+                    {site.model_c?.c_score !== null && site.model_c?.c_score !== undefined
+                      ? (site.model_c.c_score * 100).toFixed(1) + '%'
+                      : 'N/A'}
+                  </span>
                 </div>
-                <div>
-                  <div className="text-[11px] text-slate-400 mb-0.5">P99 Evidence Count:</div>
-                  <div className="text-sm font-semibold text-white font-mono">
-                    {site.model_c?.evidence_99 ? `${site.model_c.evidence_99} metrics` : '0 metrics'}
-                  </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-300">P99 Evidence Count:</span>
+                  <span className="font-bold text-white">
+                    {site.model_c?.evidence_99 ?? 0} metrics
+                  </span>
                 </div>
               </div>
-            </section>
-          </>
+
+              {site.model_c?.drivers && site.model_c.drivers.length > 0 && (
+                <div className="pt-2 border-t border-white/[0.06]">
+                  <span className="text-[10px] text-slate-400 block mb-1 uppercase font-mono">Anomaly Drivers:</span>
+                  <div className="flex flex-wrap gap-1 font-mono text-[9.5px]">
+                    {site.model_c.drivers.map((d) => (
+                      <span key={d} className="px-2 py-0.5 rounded bg-sky-950/40 text-cyan-300 border border-sky-500/30">
+                        {d}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* WorldCover 10m Composition */}
+            {site.land_cover && (
+              <div className="p-3.5 rounded-xl bg-[#08101d]/90 border border-sky-500/20 space-y-2 shadow-md">
+                <span className="text-xs font-bold text-slate-300 uppercase tracking-wider block font-mono">
+                  WorldCover 10m Composition
+                </span>
+                <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-[10px] font-mono">
+                  {Object.entries(site.land_cover).map(([k, v]) => (
+                    <div key={k} className="flex justify-between p-1.5 rounded bg-[#050c17] border border-sky-500/15">
+                      <span className="text-slate-400">{k}:</span>
+                      <span className="text-slate-200 font-semibold">{v ? `${(v * 100).toFixed(1)}%` : '0%'}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         )}
 
-        {/* ══ TIMELINE ══ */}
+        {/* ══ TAB 2: TIMELINE ══ */}
         {activeTab === 'TIMELINE' && (
           <div className="space-y-3">
-            <div className="flex items-center justify-between pb-2 border-b border-white/[0.07]">
-              <span className="text-xs font-semibold text-white uppercase tracking-wider font-mono">Historical FRP Timeline</span>
-              <span className="px-2 py-0.5 text-[10px] font-mono rounded bg-white/[0.06] text-slate-300 border border-white/[0.08]">
-                {timelineData?.history?.length ?? 0} days
+            <div className="flex items-center justify-between">
+              <span className="font-semibold text-slate-200 text-[11px] uppercase tracking-wider">
+                DAILY THERMAL HISTORY ({timelineData?.total_active_days || 0} active days)
+              </span>
+              <span className="text-[9.5px] text-[#89E5FC] font-semibold">
+                {timelineData?.first_date} → {timelineData?.last_date}
               </span>
             </div>
-            {timelineData?.history?.length ? (
-              <div className="space-y-1.5 max-h-[520px] overflow-y-auto">
-                {timelineData.history.slice(-60).reverse().map((d) => (
-                  <div key={d.acq_date} className="bg-black/30 p-2.5 rounded-lg flex items-center justify-between border border-white/[0.06]">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-semibold text-white font-mono">{d.acq_date}</span>
-                      <span className="px-1.5 py-0.5 text-[9px] font-mono rounded bg-white/[0.06] text-slate-400 border border-white/[0.08]">
-                        {d.detections} hits
-                      </span>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-xs font-bold text-[#89E5FC] font-mono">{d.max_frp.toFixed(1)} MW</div>
-                      <div className="text-[9px] text-slate-500 font-mono">mean {d.mean_frp.toFixed(1)} MW</div>
-                    </div>
+
+            {timelineData && timelineData.history.length > 0 ? (
+              <div className="space-y-2.5">
+                {/* SVG Visual Timeline Bar Chart */}
+                <div className="p-3 rounded-xl bg-black/25 border border-white/[0.07] space-y-1.5">
+                  <span className="text-[9px] text-[#64748B] block uppercase tracking-wider">
+                    MAX FRP (MW) SEQUENCE
+                  </span>
+                  <div className="h-28 flex items-end gap-1 overflow-x-auto pt-2 pb-1 custom-scrollbar">
+                    {timelineData.history.map((pt, idx) => {
+                      const maxPossibleFRP = Math.max(...timelineData.history.map(h => h.max_frp || 1), 10);
+                      const barHeight = Math.max(4, Math.round((pt.max_frp / maxPossibleFRP) * 80));
+                      const isAnomalous = pt.c_status === 'CRITICAL' || pt.c_status === 'ANOMALOUS';
+
+                      return (
+                        <div
+                          key={idx}
+                          className="flex flex-col items-center group relative cursor-pointer"
+                          title={`${pt.acq_date}: Max FRP ${pt.max_frp} MW, ${pt.detections} detections, Status: ${pt.c_status || 'UNAVAILABLE'}`}
+                        >
+                          <div
+                            style={{ height: `${barHeight}px` }}
+                            className={`w-2.5 rounded-t transition-all ${
+                              isAnomalous
+                                ? 'bg-rose-500 shadow-[0_0_8px_#f43f5e]'
+                                : 'bg-[#89E5FC] hover:bg-white'
+                            }`}
+                          />
+                        </div>
+                      );
+                    })}
                   </div>
-                ))}
+                </div>
+
+                {/* Tabular chronological log */}
+                <div className="rounded-xl border border-white/[0.07] overflow-hidden bg-black/20">
+                  <table className="w-full text-left text-[9.5px]">
+                    <thead className="bg-black/40 text-[#64748B] border-b border-white/[0.07]">
+                      <tr>
+                        <th className="p-2">Date</th>
+                        <th className="p-2">Detections</th>
+                        <th className="p-2">Max FRP</th>
+                        <th className="p-2">C Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/[0.04]">
+                      {timelineData.history.slice(-15).reverse().map((pt, i) => (
+                        <tr key={i} className="hover:bg-white/[0.04] transition-colors">
+                          <td className="p-2 text-slate-300">{pt.acq_date}</td>
+                          <td className="p-2 text-[#89E5FC] font-bold">{pt.detections}</td>
+                          <td className="p-2 text-amber-300 font-bold">{pt.max_frp.toFixed(1)} MW</td>
+                          <td className="p-2">
+                            <span className={`px-1.5 py-0.5 rounded text-[8.5px] ${
+                              pt.c_status === 'CRITICAL' ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30' :
+                              pt.c_status === 'ANOMALOUS' ? 'bg-orange-500/20 text-orange-300 border border-orange-500/30' :
+                              'text-slate-400'
+                            }`}>
+                              {pt.c_status || 'UNAVAILABLE'}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : prithviPending ? (
+              <div className="prithvi-empty-progress" role="status" aria-live="polite">
+                <span className="prithvi-progress-orbit" aria-hidden="true" />
+                <div className="text-cyan-200 font-bold tracking-wider">HLS / PRITHVI EVALUATION IN PROGRESS</div>
+                <div className="mt-2 text-[10px] text-slate-500">
+                  Server-side retrieval and inference are asynchronous. Results will appear here automatically.
+                </div>
               </div>
             ) : (
-              <div className="p-8 text-center text-slate-500 text-xs font-mono bg-black/20 rounded-xl border border-white/[0.06]">
-                No chronological detections for this cutoff window.
+              <div className="p-8 text-center text-[#64748B] bg-black/20 rounded-xl border border-white/[0.06]">
+                No recorded thermal activity history for this site.
               </div>
             )}
           </div>
         )}
 
-        {/* ══ EVIDENCE ══ */}
+        {/* ══ TAB 3: EVIDENCE ══ */}
         {activeTab === 'EVIDENCE' && (
           <div className="space-y-3">
-            <div className="flex items-center justify-between pb-2 border-b border-white/[0.07]">
-              <span className="text-xs font-semibold text-white uppercase tracking-wider font-mono">Proximate Facility Evidence</span>
-              <span className="px-2 py-0.5 text-[10px] font-mono rounded bg-white/[0.06] text-slate-300 border border-white/[0.08]">
-                Within 5.0 km
+            <div className="flex items-center justify-between">
+              <span className="font-semibold text-slate-200 text-[11px] uppercase tracking-wider">
+                CORROBORATING GIS EVIDENCE ({evidenceData?.total_evidence_count || 0})
+              </span>
+              <span className="text-[9.5px] text-[#64748B]">
+                Radius: {evidenceData?.search_radius_m || 5000}m
               </span>
             </div>
-            {evidenceData?.evidence?.length ? (
+
+            {evidenceData && evidenceData.evidence.length > 0 ? (
               <div className="space-y-2">
-                {evidenceData.evidence.map((fac, idx) => (
-                  <div key={idx} className="bg-black/30 p-3 rounded-xl border border-white/[0.08] space-y-1">
+                {evidenceData.evidence.map((ev) => (
+                  <div key={ev.evidence_id} className="p-2.5 rounded-xl bg-black/25 border border-white/[0.07] space-y-1 hover:border-white/[0.12] transition-all">
                     <div className="flex items-center justify-between">
-                      <span className="font-semibold text-white text-xs font-mono">{fac.facility_name}</span>
-                      <span className="px-1.5 py-0.5 text-[9px] font-mono rounded bg-[#89E5FC]/10 text-[#89E5FC] border border-[#89E5FC]/20">
-                        {fac.distance_m ? `${(fac.distance_m / 1000).toFixed(2)} km` : 'CO-LOCATED'}
+                      <span className="chip chip-cyan text-[8.5px]">
+                        {ev.source_name}
+                      </span>
+                      <span className="text-[#89E5FC] font-bold text-[10px]">
+                        {ev.distance_m}m away
                       </span>
                     </div>
-                    <div className="flex items-center gap-2 text-[10px] text-slate-500 font-mono">
-                      <span>{fac.source_name}</span>
-                      <span className="text-white/20">•</span>
-                      <span>{fac.facility_type || 'INDUSTRIAL'}</span>
+                    <div className="font-semibold text-white text-[11px] mt-1">
+                      {ev.facility_name}
                     </div>
+                    <div className="text-[9.5px] text-[#64748B] flex items-center justify-between">
+                      <span>Type: {ev.facility_type}</span>
+                      <span>Quality: {ev.coordinate_quality}</span>
+                    </div>
+                    {ev.source_url && (
+                      <a
+                        href={ev.source_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 text-[9.5px] text-[#89E5FC] hover:underline pt-0.5"
+                      >
+                        Source Registry <ExternalLink className="w-2.5 h-2.5" />
+                      </a>
+                    )}
                   </div>
                 ))}
               </div>
             ) : (
-              <div className="p-8 text-center text-slate-500 text-xs font-mono bg-black/20 rounded-xl border border-white/[0.06]">
-                No registered facilities within 5 km radius.
+              <div className="p-8 text-center text-[#64748B] bg-black/20 rounded-xl border border-white/[0.06]">
+                No overlapping external facility evidence found within 5 km.
               </div>
             )}
           </div>
         )}
 
-        {/* ══ SATELLITE ══ */}
+        {/* ══ TAB 4: SATELLITE IMAGERY ══ */}
         {activeTab === 'SATELLITE' && (
           <div className="space-y-3">
-            <div className="flex items-center justify-between pb-2 border-b border-white/[0.07]">
-              <span className="text-xs font-semibold text-white uppercase tracking-wider font-mono">HLS / Sentinel-2 Cache</span>
-              <span className="px-2 py-0.5 text-[10px] font-mono rounded bg-white/[0.06] text-slate-300 border border-white/[0.08]">
-                {imageryData.length} tiles
+            <div className="flex items-center justify-between border-b border-white/[0.07] pb-2">
+              <span className="font-semibold text-white text-[11px] flex items-center gap-1.5 uppercase tracking-wider">
+                <Satellite className="w-3.5 h-3.5 text-[#89E5FC]" />
+                HLS / PRITHVI EVIDENCE
+              </span>
+              <span className="chip chip-cyan text-[8.5px]">
+                6×224×224 HLS
               </span>
             </div>
-            {imageryData.length ? (
+
+            {imageryData.length > 0 ? (
               <div className="space-y-3">
-                {imageryData.map((tile, idx) => (
-                  <div key={idx} className="bg-black/30 p-3 rounded-xl border border-white/[0.08] space-y-2">
+                {imageryData.map((img) => (
+                  <div key={img.cache_id} className="hud-card rounded-xl p-3 space-y-2.5 bg-black/25 border border-white/[0.07]">
                     <div className="flex items-center justify-between">
-                      <span className="font-bold text-white text-xs font-mono">{tile.cache_id || tile.product || 'Sentinel-2 RGB/SWIR'}</span>
-                      <span className="px-1.5 py-0.5 text-[9px] font-mono rounded bg-[#89E5FC]/10 text-[#89E5FC] border border-[#89E5FC]/20">
-                        {tile.status}
+                      <span className="text-[#89E5FC] font-bold text-[11px]">{img.product || 'HLS'}</span>
+                      <span className="chip text-[8.5px]">
+                        {img.status}
                       </span>
                     </div>
-                    <div className="text-[10px] text-slate-500 space-y-0.5 font-mono">
-                      <div>Pass Date: <span className="text-slate-300">{tile.acquisition_date || 'N/A'}</span></div>
-                      <div>Cloud Cover: <span className="text-[#89E5FC]">{tile.cloud_fraction != null ? `${(tile.cloud_fraction * 100).toFixed(1)}%` : '0%'}</span></div>
+
+                    <div className="grid grid-cols-2 gap-2 text-[9.5px]">
+                      <div className="p-2 rounded-lg bg-black/30 border border-white/[0.04]">
+                        <span className="text-[#64748B] block">Acquisition</span>
+                        <span className="text-slate-200 mt-0.5 font-semibold">{img.acquisition_date}</span>
+                      </div>
+                      <div className="p-2 rounded-lg bg-black/30 border border-white/[0.04]">
+                        <span className="text-[#64748B] block">Cloud / Invalid</span>
+                        <span className="text-slate-200 mt-0.5 font-semibold">
+                          {img.cloud_fraction !== null ? `${(img.cloud_fraction * 100).toFixed(1)}%` : 'N/A'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="p-2.5 rounded-lg bg-black/20 border border-white/[0.05] space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-bold text-white flex items-center gap-1.5 uppercase">
+                          <Sparkles className="w-3 h-3 text-[#89E5FC]" />
+                          Prithvi-EO-2.0 (300M)
+                        </span>
+                        <span className="text-[9px] text-[#64748B]">
+                          {img.model_revision || 'MODEL UNAVAILABLE'}
+                        </span>
+                      </div>
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-[9.5px]">
+                          <span className="text-[#64748B]">Industrial Probability</span>
+                          <span className="text-[#89E5FC] font-bold">
+                            {img.prithvi_probability !== null ? `${(img.prithvi_probability * 100).toFixed(1)}%` : 'N/A'}
+                          </span>
+                        </div>
+                        <div className="h-1.5 w-full bg-black/40 rounded-full overflow-hidden border border-white/[0.06]">
+                          <div
+                            className="h-full bg-gradient-to-r from-cyan-500 via-sky-400 to-amber-400 transition-all duration-700"
+                            style={{ width: `${(img.prithvi_probability ?? 0) * 100}%` }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="p-2 rounded-lg bg-sky-950/20 border border-sky-400/20 text-[9.5px] space-y-1">
+                      <div className="flex items-center gap-1 text-[#89E5FC] font-semibold">
+                        <ShieldCheck className="w-3 h-3 text-[#89E5FC]" />
+                        <span>GUARDED DECISION PROVENANCE</span>
+                      </div>
+                      <p className="text-slate-300 leading-relaxed text-[9px]">
+                        {img.prithvi_probability === null || site.model_a?.core_probability === null || site.model_a?.core_probability === undefined
+                          ? 'No Prithvi probability is available. No visual inference has been fabricated, and the A-Core decision remains unchanged.'
+                          : site.model_a.core_probability >= 0.885
+                          ? `A-Core is positive (${(site.model_a.core_probability * 100).toFixed(1)}%). Prithvi evidence cannot veto it.`
+                          : site.model_a.core_probability >= 0.405 && img.prithvi_probability >= 0.965
+                          ? `A-Core was uncertain and genuine Prithvi evidence met the 96.5% positive-rescue threshold.`
+                          : 'The positive-rescue threshold was not met; the site remains UNKNOWN under the frozen policy.'}
+                      </p>
                     </div>
                   </div>
                 ))}
               </div>
             ) : (
-              <div className="p-8 text-center text-slate-500 text-xs font-mono bg-black/20 rounded-xl border border-white/[0.06]">
-                No Sentinel-2 tiles cached for this location.
+              <div className="p-8 text-center text-[#64748B] bg-black/20 rounded-xl border border-white/[0.06]">
+                <Satellite className="w-6 h-6 text-slate-600 mx-auto mb-2" />
+                <div>No cached HLS / Prithvi evidence is available.</div>
               </div>
             )}
           </div>
         )}
 
-        {/* ══ DETECTIONS ══ */}
+        {/* ══ TAB 5: RAW FIRMS DETECTIONS ══ */}
         {activeTab === 'RAW_FIRMS' && (
-          <div className="space-y-3">
-            <div className="flex items-center justify-between pb-2 border-b border-white/[0.07]">
-              <span className="text-xs font-semibold text-white uppercase tracking-wider font-mono">Raw VIIRS Detections</span>
-              <span className="px-2 py-0.5 text-[10px] font-mono rounded bg-white/[0.06] text-slate-300 border border-white/[0.08]">
-                {detectionsData?.detections.length ?? 0} records
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="font-semibold text-slate-200 text-[11px] uppercase tracking-wider">
+                RAW HOTSPOT LOG ({detectionsData?.count || 0})
               </span>
             </div>
-            {detectionsData?.detections?.length ? (
-              <div className="space-y-1.5 max-h-[520px] overflow-y-auto">
-                {detectionsData.detections.slice(0, 50).map((det, idx) => (
-                  <div key={idx} className="bg-black/30 p-2.5 rounded-lg flex items-center justify-between border border-white/[0.06]">
-                    <div>
-                      <div className="font-semibold text-white text-xs font-mono">{det.acq_date} {det.acq_time}</div>
-                      <div className="text-[9px] text-slate-500 font-mono">{det.satellite || 'NOAA-20'} · CONF: {det.confidence}</div>
-                    </div>
-                    <div className="text-right">
-                      <div className="font-bold text-[#89E5FC] font-mono text-xs">{det.frp.toFixed(1)} MW</div>
-                      <div className="text-[9px] text-slate-500 font-mono">
-                        {det.bright_ti4 ? `${det.bright_ti4.toFixed(1)} K` : 'N/A'}
-                      </div>
-                    </div>
-                  </div>
-                ))}
+
+            {detectionsData && detectionsData.detections.length > 0 ? (
+              <div className="rounded-xl border border-white/[0.07] overflow-hidden bg-black/20">
+                <table className="w-full text-left text-[9px]">
+                  <thead className="bg-black/40 text-[#64748B] border-b border-white/[0.07]">
+                    <tr>
+                      <th className="p-2">Acq Date</th>
+                      <th className="p-2">Time</th>
+                      <th className="p-2">Sensor</th>
+                      <th className="p-2">FRP</th>
+                      <th className="p-2">Conf</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/[0.04]">
+                    {detectionsData.detections.map((d) => (
+                      <tr key={d.detection_id} className="hover:bg-white/[0.04] transition-colors">
+                        <td className="p-2 text-slate-300">{d.acq_date}</td>
+                        <td className="p-2 text-[#64748B]">{d.acq_time}</td>
+                        <td className="p-2 text-[#64748B]">{d.source_sensor}</td>
+                        <td className="p-2 text-amber-300 font-bold">{d.frp.toFixed(1)} MW</td>
+                        <td className="p-2 text-[#64748B]">{d.confidence}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             ) : (
-              <div className="p-8 text-center text-slate-500 text-xs font-mono bg-black/20 rounded-xl border border-white/[0.06]">
-                No raw FIRMS detection records found.
+              <div className="p-8 text-center text-[#64748B] bg-black/20 rounded-xl border border-white/[0.06]">
+                No individual hotspot detections loaded for this site.
               </div>
             )}
           </div>
         )}
       </div>
 
-      {/* ── Footer — exact Stitch spec ── */}
-      <footer
-        className="px-4 py-2.5 bg-black/40 border-t border-white/[0.06] flex items-center justify-between text-[10px] font-mono text-slate-500 shrink-0"
-        data-purpose="panel-system-status"
-      >
-        <span>NTRO TACTICAL C4ISR v2.4</span>
-        <span className="flex items-center gap-1.5 text-emerald-400 font-medium">
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-          STREAM ACTIVE
-        </span>
-      </footer>
+      {/* ── Tactical Footer Status Bar ── */}
+      <div className="p-3.5 border-t border-sky-500/15 bg-[#050a14]/90 flex items-center justify-between text-[10px] font-mono shrink-0">
+        <span className="text-slate-500 font-mono tracking-wider font-semibold">NTRO TACTICAL C4ISR v2.4</span>
+        <div className="flex items-center gap-2 text-emerald-400 font-mono font-bold tracking-wider">
+          <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399] animate-pulse inline-block" />
+          <span>STREAM ACTIVE</span>
+        </div>
+      </div>
     </aside>
   );
 };

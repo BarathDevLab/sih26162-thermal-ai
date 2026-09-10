@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   ChevronDown,
   ChevronUp,
@@ -26,6 +26,13 @@ export const AlertRail: React.FC<AlertRailProps> = ({
   const [collapsed, setCollapsed] = useState<boolean>(false);
   const [ackingId, setAckingId] = useState<string | null>(null);
 
+  // Auto-collapse AlertRail into compact pill when site drawer opens to prevent blocking the map
+  useEffect(() => {
+    if (hasSelectedSite) {
+      setCollapsed(true);
+    }
+  }, [hasSelectedSite]);
+
   const handleAck = async (alertId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     setAckingId(alertId);
@@ -41,9 +48,9 @@ export const AlertRail: React.FC<AlertRailProps> = ({
 
   const criticalCount = alerts.filter(a => a.alert_level === 'CRITICAL').length;
 
-  // Responsive docking: If site drawer is open on the right, dock adjacent to it
+  // Responsive docking: If site drawer is open on the right (460px + 16px = 476px), dock adjacent to it with 10px clearance
   const positionClass = hasSelectedSite
-    ? 'top-14 right-[400px]'
+    ? 'top-14 right-[485px]'
     : 'top-14 right-4';
 
   // Compact floating pill when collapsed

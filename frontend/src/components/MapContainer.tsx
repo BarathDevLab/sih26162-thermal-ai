@@ -945,21 +945,23 @@ export const MapContainer: React.FC<MapContainerProps> = ({
             ? `${rawId.slice(0, 15)}...${rawId.slice(-5)}`
             : rawId;
 
+          if (p?.site_id && p.site_id === selectedSiteId) return;
+
           const html = `
-            <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; line-height: 1.45; min-width: 190px; max-width: 310px;">
-              <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid rgba(255,255,255,0.12); padding-bottom: 4px; margin-bottom: 4px;">
-                <span title="${rawId}" style="font-weight: bold; color: #38bdf8; letter-spacing: 0.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px; display: inline-block;">${shortId}</span>
-                <span style="color: #64748b; font-size: 9px; font-weight: 600; flex-shrink: 0; background: rgba(255,255,255,0.06); padding: 1px 4px; border-radius: 3px; border: 1px solid rgba(255,255,255,0.08);">LOC-LOCK</span>
+            <div style="font-family: 'JetBrains Mono', monospace; font-size: 10px; line-height: 1.4; min-width: 170px; max-width: 270px; color: #e2e8f0;">
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 3px; margin-bottom: 4px;">
+                <span title="${rawId}" style="font-weight: bold; color: #89e5fc; letter-spacing: 0.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px; display: inline-block;">${shortId}</span>
+                <span style="color: #64748b; font-size: 8.5px; font-weight: 600; flex-shrink: 0; background: rgba(255,255,255,0.05); padding: 1px 4px; border-radius: 3px; border: 1px solid rgba(255,255,255,0.08);">TARGET</span>
               </div>
-              <div style="color: #94a3b8; font-size: 9.5px;">COORD: ${coordinates[1].toFixed(4)}°N, ${coordinates[0].toFixed(4)}°E</div>
-              <div style="margin-top: 5px; display: flex; flex-wrap: wrap; gap: 4px;">
-                <span style="background: rgba(245,158,11,0.18); color: #fbbf24; border: 1px solid rgba(245,158,11,0.35); padding: 1px 5px; border-radius: 4px; font-size: 9px; font-weight: 600;">${p.a_class}</span>
-                <span style="background: rgba(6,182,212,0.18); color: #38bdf8; border: 1px solid rgba(6,182,212,0.35); padding: 1px 5px; border-radius: 4px; font-size: 9px; font-weight: 600;">${p.b_state}</span>
-                <span style="background: ${p.c_status === 'CRITICAL' ? 'rgba(239,68,68,0.22)' : 'rgba(16,185,129,0.18)'}; color: ${p.c_status === 'CRITICAL' ? '#f87171' : '#34d399'}; border: 1px solid ${p.c_status === 'CRITICAL' ? 'rgba(239,68,68,0.45)' : 'rgba(16,185,129,0.35)'}; padding: 1px 5px; border-radius: 4px; font-size: 9px; font-weight: 600;">${p.c_status}</span>
+              <div style="color: #64748b; font-size: 9px;">COORD: ${coordinates[1].toFixed(4)}°N, ${coordinates[0].toFixed(4)}°E</div>
+              <div style="margin-top: 4px; display: flex; flex-wrap: wrap; gap: 3px;">
+                <span style="background: rgba(245,158,11,0.12); color: #fbbf24; border: 1px solid rgba(245,158,11,0.25); padding: 1px 5px; border-radius: 3px; font-size: 8.5px; font-weight: 600;">${p.a_class}</span>
+                <span style="background: rgba(6,182,212,0.12); color: #89e5fc; border: 1px solid rgba(6,182,212,0.25); padding: 1px 5px; border-radius: 3px; font-size: 8.5px; font-weight: 600;">${p.b_state}</span>
+                <span style="background: ${p.c_status === 'CRITICAL' ? 'rgba(244,63,94,0.15)' : 'rgba(16,185,129,0.12)'}; color: ${p.c_status === 'CRITICAL' ? '#fda4af' : '#34d399'}; border: 1px solid ${p.c_status === 'CRITICAL' ? 'rgba(244,63,94,0.3)' : 'rgba(16,185,129,0.25)'}; padding: 1px 5px; border-radius: 3px; font-size: 8.5px; font-weight: 600;">${p.c_status}</span>
               </div>
               ${p.alert_severity && p.alert_severity !== 'NONE' ? `
-                <div style="background: rgba(239,68,68,0.2); border: 1px solid rgba(239,68,68,0.5); color: #fca5a5; font-weight: bold; font-size: 9px; padding: 2px 4px; border-radius: 4px; margin-top: 5px; text-align: center;">
-                  ⚡ ALERT: ${p.alert_severity}
+                <div style="background: rgba(244,63,94,0.12); border: 1px solid rgba(244,63,94,0.3); color: #fda4af; font-weight: bold; font-size: 8.5px; padding: 2px 4px; border-radius: 3px; margin-top: 4px; text-align: center;">
+                  ALERT: ${p.alert_severity}
                 </div>` : ''}
             </div>
           `;

@@ -1,6 +1,6 @@
 /**
  * Satellite Constellation & Orbital Tracks Service
- * Generates realistic 3D satellite orbits and positions (NOAA-20/21 VIIRS, MODIS, HLS, LEO shells)
+ * Generates an illustrative Earth-observation overlay for the map presentation layer.
  */
 
 export interface SatelliteFeature {
@@ -12,7 +12,7 @@ export interface SatelliteFeature {
   properties: {
     id: string;
     name: string;
-    type: 'THERMAL_NRT' | 'EARTH_OBSERVATION' | 'WEATHER' | 'SURVEILLANCE';
+    type: 'THERMAL_NRT' | 'EARTH_OBSERVATION' | 'WEATHER' | 'REFERENCE_ORBIT';
     altitude_km: number;
     color: string;
     sensor?: string;
@@ -85,12 +85,12 @@ export function getSatelliteOrbitRings(): { type: 'FeatureCollection'; features:
     {
       type: 'Feature',
       geometry: { type: 'LineString', coordinates: calculateOrbitCoordinates(53, 30) },
-      properties: { name: 'LEO Constellation Track A', type: 'SURVEILLANCE', color: '#0ea5e9' }
+      properties: { name: 'LEO Reference Track A', type: 'REFERENCE_ORBIT', color: '#0ea5e9' }
     },
     {
       type: 'Feature',
       geometry: { type: 'LineString', coordinates: calculateOrbitCoordinates(53, 210) },
-      properties: { name: 'LEO Constellation Track B', type: 'SURVEILLANCE', color: '#0ea5e9' }
+      properties: { name: 'LEO Reference Track B', type: 'REFERENCE_ORBIT', color: '#0ea5e9' }
     }
   ];
 
@@ -160,7 +160,7 @@ export function getSatelliteConstellation(count: number = 260): { type: 'Feature
       properties: {
         id: `SAT_LEO_${i}`,
         name: `LEO-SAT-${(1000 + i).toString(16).toUpperCase()}`,
-        type: pseudoRandom() > 0.7 ? 'THERMAL_NRT' : 'SURVEILLANCE',
+        type: pseudoRandom() > 0.7 ? 'THERMAL_NRT' : 'REFERENCE_ORBIT',
         altitude_km: Math.round(550 + pseudoRandom() * 400),
         color,
         is_primary: false
@@ -216,4 +216,3 @@ export function getSensorSwathPolygons(): { type: 'FeatureCollection'; features:
     ]
   };
 }
-
