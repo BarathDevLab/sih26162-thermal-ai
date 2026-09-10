@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import importlib.util
 import json
 import logging
 import math
@@ -14,6 +13,11 @@ from collections import defaultdict
 from typing import Dict, Mapping, Optional, Tuple
 
 import numpy as np
+
+from backend.app.services.rasterio_environment import (
+    RasterioEnvironmentUnavailable,
+    configure_rasterio_environment as _configure_rasterio_environment,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -56,22 +60,10 @@ REMOTE_RETRY_DELAYS_SECONDS = (2, 5, 10)
 
 def configure_rasterio_environment() -> None:
     """Keep Rasterio isolated from incompatible system/PostGIS GDAL data."""
-    spec = importlib.util.find_spec("rasterio")
-    if spec is None or spec.origin is None:
-        raise WorldCoverUnavailable("rasterio is not installed.")
-    package_dir = Path(spec.origin).resolve().parent
-    proj_data = package_dir / "proj_data"
-    gdal_data = package_dir / "gdal_data"
-    if not (proj_data / "proj.db").is_file() or not gdal_data.is_dir():
-        raise WorldCoverUnavailable(
-            f"Rasterio's bundled PROJ/GDAL data directories are incomplete under {package_dir}."
-        )
-    # PostgreSQL installers commonly add their PostGIS copies globally. Those
-    # files are for the database server and can be schema-incompatible with
-    # Rasterio's bundled GDAL/PROJ build. Override only this Python process.
-    os.environ["PROJ_DATA"] = str(proj_data)
-    os.environ["PROJ_LIB"] = str(proj_data)
-    os.environ["GDAL_DATA"] = str(gdal_data)
+    try:
+        _configure_rasterio_environment()
+    except RasterioEnvironmentUnavailable as exc:
+        raise WorldCoverUnavailable(str(exc)) from exc
 
 
 class WorldCoverUnavailable(RuntimeError):

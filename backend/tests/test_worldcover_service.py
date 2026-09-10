@@ -75,6 +75,7 @@ def test_rasterio_uses_its_bundled_proj_and_gdal_data(monkeypatch):
     assert Path(os.environ["PROJ_LIB"]) == package_dir / "proj_data"
     assert Path(os.environ["PROJ_DATA"]) == package_dir / "proj_data"
     assert Path(os.environ["GDAL_DATA"]) == package_dir / "gdal_data"
+    assert os.environ["GTIFF_SRS_SOURCE"] == "EPSG"
 
 
 def test_transient_worldcover_open_is_retried_then_fails_fast(monkeypatch):

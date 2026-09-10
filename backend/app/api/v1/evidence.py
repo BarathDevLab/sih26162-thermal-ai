@@ -12,7 +12,13 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from backend.app.db.session import get_db
-from backend.app.db.models import SourceSite, FacilityEvidence, EventEvidence, SiteModelA
+from backend.app.db.models import (
+    EventEvidence,
+    FacilityEvidence,
+    ImageryCache,
+    SiteModelA,
+    SourceSite,
+)
 from backend.app.schemas.evidence import (
     SiteEvidenceResponse,
     FacilityEvidenceSummary,
@@ -159,8 +165,8 @@ def get_site_imagery(
     db: Session = Depends(get_db),
 ):
     """
-    Returns metadata for genuine cached HLS/Prithvi evidence. If no cache exists,
-    the site is queued asynchronously and no probability is fabricated.
+    Returns metadata for genuine cached HLS/Prithvi evidence. Missing or expired
+    failed work is queued asynchronously and no probability is fabricated.
     """
     site = db.query(SourceSite).filter(SourceSite.site_id == site_id).first()
     if not site:
@@ -172,14 +178,49 @@ def get_site_imagery(
             summaries = [item for item in summaries if item.acquisition_date <= as_of_date.isoformat()]
         model_a = db.query(SiteModelA).filter_by(site_id=site_id).one_or_none()
         prithvi_enabled = os.environ.get("PRITHVI_ENABLED", "false").lower() == "true"
-        if as_of_date is None and not summaries and prithvi_enabled and model_a is not None:
+        if as_of_date is None and prithvi_enabled and model_a is not None:
             engine = get_shared_model_a()
-            if engine.thresh_low <= model_a.core_probability < engine.thresh_core:
-                enqueue_site_for_prithvi(site_id)
+            if (
+                engine.thresh_low <= model_a.core_probability < engine.thresh_core
+                and _prithvi_retry_due(db, site_id, summaries)
+                and enqueue_site_for_prithvi(site_id)
+            ):
+                model_a.prithvi_status = "PENDING"
+                db.commit()
         return summaries
     except Exception as e:
         logger.error(f"Error reading imagery status for site '{site_id}': {e}")
         raise HTTPException(status_code=500, detail=f"Failed to read imagery status: {str(e)}")
+
+
+def _prithvi_retry_due(
+    db: Session, site_id: str, summaries: List[ImageryCacheSummary]
+) -> bool:
+    """Allow failed asynchronous imagery work to recover without request-loop churn."""
+
+    if any(item.status == "AVAILABLE" for item in summaries):
+        return False
+    latest = (
+        db.query(ImageryCache)
+        .filter(ImageryCache.site_id == site_id)
+        .order_by(ImageryCache.updated_at.desc())
+        .first()
+    )
+    if latest is None:
+        return True
+    if latest.status != "UNAVAILABLE":
+        return False
+    updated_at = latest.updated_at
+    if updated_at is None:
+        return True
+    if updated_at.tzinfo is None:
+        updated_at = updated_at.replace(tzinfo=timezone.utc)
+    try:
+        retry_minutes = max(1, int(os.environ.get("PRITHVI_RETRY_AFTER_MINUTES", "60")))
+    except ValueError:
+        logger.warning("Invalid PRITHVI_RETRY_AFTER_MINUTES; using 60 minutes.")
+        retry_minutes = 60
+    return datetime.now(timezone.utc) - updated_at >= timedelta(minutes=retry_minutes)
 
 
 @router.get(

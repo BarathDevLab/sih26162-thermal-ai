@@ -67,6 +67,19 @@ async def lifespan(app: FastAPI):
             start_scheduler()
         except Exception as e:
             logger.warning(f"Failed to start APScheduler in lifespan: {e}")
+    else:
+        from backend.app.services.startup_catchup import (
+            should_start_startup_catchup,
+            start_startup_catchup,
+        )
+
+        if should_start_startup_catchup(readiness):
+            app.state.startup_catchup_task = start_startup_catchup(app)
+        elif readiness.status == "STALE_BACKFILL":
+            logger.warning(
+                "Automatic startup catch-up was not started. Confirm FIRMS_MAP_KEY is set "
+                "and AUTO_STARTUP_CATCHUP is not false."
+            )
 
     yield
 

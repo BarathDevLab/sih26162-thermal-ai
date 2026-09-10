@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Header } from './components/Header';
 import { SidebarFilters } from './components/SidebarFilters';
 import { MapContainer } from './components/MapContainer';
@@ -83,6 +83,19 @@ export default function App() {
   const [sseConnected, setSseConnected] = useState<boolean>(false);
   const [focusedCoordinates, setFocusedCoordinates] = useState<[number, number] | null>(null);
 
+  const loadedModelACounts = useMemo(() => {
+    const counts = {
+      INDUSTRIAL: 0,
+      NONINDUSTRIAL: 0,
+      UNKNOWN: 0,
+      UNAVAILABLE: 0
+    };
+    for (const feature of sitesData?.features ?? []) {
+      counts[feature.properties.a_class] += 1;
+    }
+    return counts;
+  }, [sitesData]);
+
   // 1. Initial Health, Stats, and Alerts Load
   useEffect(() => {
     const initTelemetry = async () => {
@@ -107,6 +120,30 @@ export default function App() {
 
     initTelemetry();
   }, []);
+
+  // A stale backend catches up in the background. Poll readiness so the UI
+  // enables Live automatically when the new common snapshot is published.
+  useEffect(() => {
+    const liveReady = health?.status === 'READY' || health?.status === 'DEGRADED_PRITHVI_UNAVAILABLE';
+    if (!health || liveReady) return;
+
+    const interval = window.setInterval(async () => {
+      try {
+        const nextHealth = await fetchHealth();
+        setHealth(nextHealth);
+        const nextLiveReady = nextHealth.status === 'READY' || nextHealth.status === 'DEGRADED_PRITHVI_UNAVAILABLE';
+        if (nextLiveReady) {
+          const nextStats = await fetchStats();
+          setStats(nextStats);
+          setMode('LIVE');
+        }
+      } catch (err) {
+        console.error('Readiness refresh failed:', err);
+      }
+    }, 10_000);
+
+    return () => window.clearInterval(interval);
+  }, [health]);
 
   // 2. Real-Time Alert Stream Subscription
   useEffect(() => {
@@ -261,6 +298,7 @@ export default function App() {
           onChange={setFilters}
           loadedSiteCount={sitesData?.returned_count ?? sitesData?.features.length ?? 0}
           totalSiteCount={sitesData?.total_count ?? 0}
+          modelACounts={loadedModelACounts}
           isLoading={sitesLoading}
         />
 

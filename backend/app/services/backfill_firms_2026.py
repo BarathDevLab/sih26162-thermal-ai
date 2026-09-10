@@ -97,7 +97,9 @@ class BackfillOrchestrator:
         if update_db and dry_run:
             raise ValueError("--dry-run and --update-db are mutually exclusive.")
         if update_db:
+            logger.info("Verifying packaged runtime artifacts and database prerequisites...")
             self._verify_required_bootstrap_files()
+            logger.info("Runtime artifact verification passed.")
 
         if self.client.offline_mode:
             windows = [
@@ -107,8 +109,10 @@ class BackfillOrchestrator:
                 )
             ]
         else:
+            logger.info("Checking NASA FIRMS source availability through %s...", target)
             availability = self.client.check_availability("all")
             windows = self.build_available_source_windows(start, target, source, availability)
+        logger.info("Planned %d audited FIRMS windows.", len(windows))
 
         totals = {"fetched": 0, "unique": 0, "inserted": 0, "revised": 0,
                   "promoted": 0, "alerts": 0}
@@ -117,11 +121,28 @@ class BackfillOrchestrator:
 
         db: Optional[Session] = self.session_factory() if update_db else None
         try:
+            model_refresh_start = start
             if db is not None:
                 self._verify_database_bootstrap(db)
-                for current in db.query(StackSnapshot).filter_by(status="CURRENT").all():
-                    current.status = "REBUILDING"
-                db.commit()
+                baseline = (
+                    db.query(StackSnapshot)
+                    .filter(StackSnapshot.status.in_(("CURRENT", "REBUILDING")))
+                    .order_by(StackSnapshot.data_through_date.desc())
+                    .first()
+                )
+                if baseline is not None:
+                    model_refresh_start = max(
+                        start, baseline.data_through_date + timedelta(days=1)
+                    )
+                    logger.info(
+                        "Incremental A/C refresh will cover sites active from %s through %s.",
+                        model_refresh_start,
+                        target,
+                    )
+                else:
+                    logger.info(
+                        "No prior runtime snapshot found; full A/C materialization is required."
+                    )
             for index, (window_source, window_start, day_span) in enumerate(windows, 1):
                 window_start_date = datetime.strptime(window_start, "%Y-%m-%d").date()
                 window_end = min(target, window_start_date + timedelta(days=day_span - 1))
@@ -181,18 +202,25 @@ class BackfillOrchestrator:
             snapshot_status = "DRY_RUN" if dry_run else "FETCH_ONLY"
             snapshot_id = None
             if db is not None:
+                logger.info("Refreshing deterministic Model B through %s...", target)
                 run_global_daily_model_b_refresh(db, target)
-                degraded_a = self._refresh_2026_stack(db, start, target, source)
+                logger.info("Refreshing Model A/C for sites changed since %s...", model_refresh_start)
+                degraded_a = self._refresh_2026_stack(
+                    db, model_refresh_start, target, source
+                )
+                logger.info("Verifying audited FIRMS date coverage through %s...", target)
                 self._verify_database_coverage(db, start, target, source, bbox)
                 if degraded_a:
                     raise RuntimeError(
                         f"Backfill processed data but Model A lacked authoritative inputs for {len(degraded_a)} "
                         "sites; CURRENT snapshot was not published."
                     )
+                logger.info("Publishing atomic CURRENT A/B/C snapshot through %s...", target)
                 snapshot = self._publish_snapshot(db, target, source)
                 db.commit()
                 snapshot_id = snapshot.snapshot_id
                 snapshot_status = snapshot.status
+                logger.info("Backfill snapshot published with status %s.", snapshot_status)
         except Exception:
             if db is not None:
                 db.rollback()
@@ -354,15 +382,18 @@ class BackfillOrchestrator:
             cursor = max(row.window_end for row in covering) + timedelta(days=1)
 
     def _refresh_2026_stack(
-        self, db: Session, start: date, target: date, source: str
+        self, db: Session, refresh_start: date, target: date, source: str
     ) -> Dict[str, str]:
-        """Make reruns idempotently materialize A and C through the requested cutoff."""
+        """Materialize A/C only for sites changed since the last published cutoff."""
         accepted_sources = NOAA20_SOURCE_FAMILY if source == DEFAULT_PRIMARY_SOURCE else (source,)
+        if refresh_start > target:
+            logger.info("A/C stack is already materialized through %s.", target)
+            return {}
         touched_sites = (
             db.query(FirmsDetection.source_site_id.label("site_id"))
             .filter(
                 FirmsDetection.source_sensor.in_(accepted_sources),
-                FirmsDetection.acq_date >= start,
+                FirmsDetection.acq_date >= refresh_start,
                 FirmsDetection.acq_date <= target,
                 FirmsDetection.source_site_id.isnot(None),
             )
@@ -400,6 +431,7 @@ class BackfillOrchestrator:
             db.commit()
 
         total_sites = len(site_ids)
+        logger.info("Incremental Model A/C materialization includes %d sites.", total_sites)
         for index, site_id in enumerate(site_ids, start=1):
             a_result = None
             if site_id not in unavailable:
@@ -424,11 +456,14 @@ class BackfillOrchestrator:
                 db.commit()
                 logger.info("Materialized Model A/C for %d/%d sites", index, total_sites)
         db.commit()
+        logger.info("Model A/C materialization complete for %d sites.", total_sites)
         return unavailable
 
     @staticmethod
     def _publish_snapshot(db: Session, target: date, source: str) -> StackSnapshot:
-        for old in db.query(StackSnapshot).filter(StackSnapshot.status == "CURRENT").all():
+        for old in db.query(StackSnapshot).filter(
+            StackSnapshot.status.in_(("CURRENT", "REBUILDING"))
+        ).all():
             old.status = "SUPERSEDED"
         identity = f"{MODEL_STACK_VERSION}:{target.isoformat()}:{source}"
         snapshot_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()
@@ -468,6 +503,18 @@ def main() -> None:
     parser.add_argument("--cache-dir", default=DEFAULT_CACHE_DIR)
     parser.add_argument("--update-db", action="store_true")
     args = parser.parse_args()
+    log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
+    logging.basicConfig(
+        level=getattr(logging, log_level, logging.INFO),
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+    logger.info(
+        "Starting FIRMS backfill: %s through %s (update_db=%s, offline=%s)",
+        args.start_date,
+        args.end_date or date.today().isoformat(),
+        args.update_db,
+        args.offline,
+    )
     client = FirmsClient(map_key=args.map_key, offline_mode=args.offline, cache_dir=args.cache_dir)
     result = BackfillOrchestrator(firms_client=client).run_backfill(
         start_date=args.start_date, end_date=args.end_date,

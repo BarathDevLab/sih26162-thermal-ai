@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 import uuid
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -83,6 +84,10 @@ def _process_single_site(site_id: str) -> None:
             return
 
         acquisition_date = site.latest_seen or date.today()
+        started_at = time.perf_counter()
+        logger.info(
+            "Prithvi task started for %s (target date %s)", site_id, acquisition_date
+        )
         try:
             prithvi = PrithviService()
             patch = HLSService().get_or_fetch_patch(
@@ -136,6 +141,13 @@ def _process_single_site(site_id: str) -> None:
         if current_a["decision"] != previous_decision:
             _rerun_decision(db, site_id, current_a)
         db.commit()
+        logger.info(
+            "Prithvi task completed for %s: probability=%.6f decision=%s elapsed=%.1fs",
+            site_id,
+            result.probability,
+            current_a["decision"],
+            time.perf_counter() - started_at,
+        )
     except Exception:
         db.rollback()
         raise

@@ -7,8 +7,14 @@ import os
 import tempfile
 from datetime import date
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from backend.app.db.models import FirmsDetection, SiteModelB, SourceSite
+from backend.app.db.session import Base
 from backend.app.services.backfill_firms_2026 import BackfillOrchestrator
-from backend.app.services.firms_client import FirmsClient
+from backend.app.services.firms_client import DEFAULT_PRIMARY_SOURCE, FirmsClient
+from backend.app.services.model_a_service import LAND_COVER_FEATURES
 
 
 def test_generate_5day_windows():
@@ -71,3 +77,86 @@ def test_backfill_dry_run_offline():
         assert res["end_date"] == "2026-01-02"
         assert res["total_windows"] == 1
         assert res["dry_run"] is True
+
+
+def test_incremental_stack_refresh_only_scores_sites_active_after_snapshot():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine)()
+
+    class FakeModelA:
+        def __init__(self):
+            self.scored = []
+
+        def score_site(self, db, site_id, **kwargs):
+            self.scored.append(site_id)
+            return {"decision": "UNKNOWN"}
+
+    class FakeModelCReplay:
+        def __init__(self):
+            self.scored = []
+
+        def replay_site(self, db, site_id, cutoff=None):
+            self.scored.append(site_id)
+            return {
+                "event_date": cutoff,
+                "latest": {"status": "INSUFFICIENT_HISTORY"},
+            }
+
+    class FakePipeline:
+        def __init__(self):
+            self.model_a = FakeModelA()
+            self.model_c_replay = FakeModelCReplay()
+
+        def _evaluate_alert(self, *args, **kwargs):
+            return 0
+
+    pipeline = FakePipeline()
+    orchestrator = BackfillOrchestrator(pipeline=pipeline)
+    land_cover = {name: 0.0 for name in LAND_COVER_FEATURES}
+    try:
+        for site_id, activity_date in (
+            ("SITE_OLD", date(2026, 1, 10)),
+            ("SITE_NEW", date(2026, 9, 9)),
+        ):
+            db.add(SourceSite(
+                site_id=site_id,
+                latitude=20.0,
+                longitude=75.0,
+                land_cover=land_cover,
+            ))
+            db.add(FirmsDetection(
+                detection_id=f"DET_{site_id}",
+                source_sensor=DEFAULT_PRIMARY_SOURCE,
+                satellite="20",
+                instrument="VIIRS",
+                latitude=20.0,
+                longitude=75.0,
+                acq_date=activity_date,
+                acq_time="0830",
+                frp=10.0,
+                confidence="nominal",
+                daynight="D",
+                version="2.0",
+                source_site_id=site_id,
+            ))
+            db.add(SiteModelB(
+                site_id=site_id,
+                state="DORMANT",
+                confidence="HIGH",
+                model_version="test",
+            ))
+        db.commit()
+
+        unavailable = orchestrator._refresh_2026_stack(
+            db,
+            refresh_start=date(2026, 9, 9),
+            target=date(2026, 9, 10),
+            source=DEFAULT_PRIMARY_SOURCE,
+        )
+
+        assert unavailable == {}
+        assert pipeline.model_a.scored == ["SITE_NEW"]
+        assert pipeline.model_c_replay.scored == ["SITE_NEW"]
+    finally:
+        db.close()

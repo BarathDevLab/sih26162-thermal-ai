@@ -22,6 +22,7 @@ def test_live_status_endpoint():
     data = resp.json()
     assert "scheduler" in data
     assert "prithvi_queue" in data
+    assert "startup_catchup" in data
 
 
 def test_live_pipeline_simulation_is_disabled_by_default():
@@ -185,6 +186,7 @@ def test_historical_backfill_can_defer_models_until_final_refresh():
 
         assert result["models_deferred"] is True
         assert result["inserted_count"] == 1
+        assert result["touched_site_ids"] == ["SITE_DEFER"]
         assert db.query(SiteDailyActivity).filter_by(
             site_id="SITE_DEFER", acq_date=date(2026, 1, 1)
         ).one().detections == 1

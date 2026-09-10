@@ -25,6 +25,7 @@ interface SidebarFiltersProps {
   onChange: (f: FilterState) => void;
   loadedSiteCount: number;
   totalSiteCount: number;
+  modelACounts: Record<'INDUSTRIAL' | 'NONINDUSTRIAL' | 'UNKNOWN' | 'UNAVAILABLE', number>;
   isLoading: boolean;
 }
 
@@ -33,6 +34,7 @@ export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
   onChange,
   loadedSiteCount,
   totalSiteCount,
+  modelACounts,
   isLoading
 }) => {
   const [openSections, setOpenSections] = useState({
@@ -136,6 +138,9 @@ export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
                   </div>
                 </div>
                 <div className="flex items-center gap-1.5">
+                  <span className="min-w-8 text-right font-mono text-[10px] font-bold text-amber-300 tabular-nums">
+                    {modelACounts.INDUSTRIAL.toLocaleString()}
+                  </span>
                   <span className="w-2.5 h-2.5 rounded-full bg-amber-400 shadow-[0_0_8px_#f59e0b]" />
                 </div>
               </div>
@@ -165,6 +170,9 @@ export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
                   </div>
                 </div>
                 <div className="flex items-center gap-1.5">
+                  <span className="min-w-8 text-right font-mono text-[10px] font-bold text-emerald-300 tabular-nums">
+                    {modelACounts.NONINDUSTRIAL.toLocaleString()}
+                  </span>
                   <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-[0_0_8px_#10b981]" />
                 </div>
               </div>
@@ -195,6 +203,9 @@ export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
                   </div>
                 </div>
                 <div className="flex items-center gap-1.5">
+                  <span className="min-w-8 text-right font-mono text-[10px] font-bold text-indigo-300 tabular-nums">
+                    {modelACounts.UNKNOWN.toLocaleString()}
+                  </span>
                   <span className="w-2.5 h-2.5 rounded-full bg-indigo-400 shadow-[0_0_8px_#818cf8]" />
                 </div>
               </div>
@@ -211,7 +222,12 @@ export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
                   <span className="block font-mono text-[10.5px] font-bold">UNAVAILABLE</span>
                   <span className="block text-[9px] text-slate-400 font-mono">No current Model A inference</span>
                 </span>
-                <span className="w-2 h-2 rounded-full bg-slate-500" />
+                <span className="flex items-center gap-1.5">
+                  <span className="min-w-8 text-right font-mono text-[10px] font-bold text-slate-300 tabular-nums">
+                    {modelACounts.UNAVAILABLE.toLocaleString()}
+                  </span>
+                  <span className="w-2 h-2 rounded-full bg-slate-500" />
+                </span>
               </button>
 
               {/* Unambiguous Rule Note */}

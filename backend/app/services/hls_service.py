@@ -12,6 +12,11 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
+from backend.app.services.rasterio_environment import (
+    RasterioEnvironmentUnavailable,
+    configure_rasterio_environment,
+)
+
 
 HLS_CHANNELS = {
     "HLSS30": ("B02", "B03", "B04", "B8A", "B11", "B12"),
@@ -223,24 +228,34 @@ class HLSService:
         path: Path, latitude: float, longitude: float, reflectance: bool
     ) -> np.ndarray:
         try:
+            configure_rasterio_environment()
             import rasterio
             from rasterio.windows import Window
             from rasterio.warp import transform
-        except ImportError as exc:
-            raise HLSUnavailable("rasterio is not installed.") from exc
-        with rasterio.open(path) as source:
-            xs, ys = transform("EPSG:4326", source.crs, [longitude], [latitude])
-            row, column = source.index(xs[0], ys[0])
-            half = PATCH_SIZE // 2
-            window = Window(column - half, row - half, PATCH_SIZE, PATCH_SIZE)
-            data = source.read(1, window=window, boundless=True, masked=True)
-            if reflectance:
-                array = data.astype(np.float32).filled(np.nan)
-                scale = float(source.scales[0]) if source.scales and source.scales[0] != 1 else 0.0001
-                offset = float(source.offsets[0]) if source.offsets else 0.0
-                array = array * scale + offset
-                return array
-            return data.astype(np.uint8).filled(255)
+        except (ImportError, RasterioEnvironmentUnavailable) as exc:
+            raise HLSUnavailable(str(exc) or "rasterio is not installed.") from exc
+        try:
+            with rasterio.Env(GTIFF_SRS_SOURCE="EPSG"):
+                with rasterio.open(path) as source:
+                    xs, ys = transform("EPSG:4326", source.crs, [longitude], [latitude])
+                    row, column = source.index(xs[0], ys[0])
+                    half = PATCH_SIZE // 2
+                    window = Window(column - half, row - half, PATCH_SIZE, PATCH_SIZE)
+                    data = source.read(1, window=window, boundless=True, masked=True)
+                    if reflectance:
+                        array = data.astype(np.float32).filled(np.nan)
+                        scale = (
+                            float(source.scales[0])
+                            if source.scales and source.scales[0] != 1
+                            else 0.0001
+                        )
+                        offset = float(source.offsets[0]) if source.offsets else 0.0
+                        return array * scale + offset
+                    return data.astype(np.uint8).filled(255)
+        except HLSUnavailable:
+            raise
+        except Exception as exc:
+            raise HLSUnavailable(f"Unable to read HLS band {path.name}: {exc}") from exc
 
     def _write_cache(self, patch: HLSPatch, lookup_date: date) -> Path:
         target_dir = self.cache_dir / patch.site_id

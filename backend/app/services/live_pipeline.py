@@ -6,8 +6,10 @@ import logging
 import os
 import uuid
 from datetime import date, datetime, timezone
-from typing import Any, Dict, List, Optional, Set, Tuple
+from collections import defaultdict
+from typing import Any, DefaultDict, Dict, List, Optional, Set, Tuple
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from backend.app.db.models import (
@@ -217,6 +219,7 @@ class LivePipelineService:
                     "unchanged_count": unchanged,
                     "promoted_count": len(promoted_sites),
                     "touched_sites_count": len(touched_sites),
+                    "touched_site_ids": sorted(touched_sites),
                     "alerts_generated": 0,
                     "model_a_unavailable": {},
                     "models_deferred": True,
@@ -533,7 +536,7 @@ class LivePipelineService:
 
 
 def run_global_daily_model_b_refresh(db: Session, as_of_date: Optional[date] = None) -> Dict[str, Any]:
-    """Recompute every site with the real deterministic engine at the new cutoff."""
+    """Recompute every site with bulk I/O and the frozen deterministic engine."""
     service = get_live_pipeline_service()
     ref_date = as_of_date or date.today()
     site_ids = [row[0] for row in db.query(SourceSite.site_id).all()]
@@ -544,14 +547,102 @@ def run_global_daily_model_b_refresh(db: Session, as_of_date: Optional[date] = N
     )
     current_count = db.query(SiteModelB.site_id).count()
     if history_count == len(site_ids) and current_count == len(site_ids):
+        logger.info(
+            "Daily Model B is already materialized for all %d sites through %s.",
+            len(site_ids),
+            ref_date,
+        )
         return {
             "status": "ALREADY_COMPLETED",
             "as_of_date": ref_date.isoformat(),
             "sites_evaluated": len(site_ids),
         }
-    for site_id in site_ids:
-        service._refresh_model_b_site(db, site_id, ref_date)
-    db.commit()
+
+    logger.info(
+        "Loading Model B activity histories for %d sites through %s...",
+        len(site_ids),
+        ref_date,
+    )
+    active_dates: DefaultDict[str, List[date]] = defaultdict(list)
+    for site_id, active_date in (
+        db.query(SiteDailyActivity.site_id, SiteDailyActivity.acq_date)
+        .filter(SiteDailyActivity.acq_date <= ref_date)
+        .order_by(SiteDailyActivity.site_id, SiteDailyActivity.acq_date)
+        .yield_per(10_000)
+    ):
+        active_dates[site_id].append(active_date)
+
+    missing_activity = [site_id for site_id in site_ids if not active_dates.get(site_id)]
+    if missing_activity:
+        raise ValueError(
+            "Model B cannot refresh sites without activity on or before the cutoff: "
+            + ", ".join(missing_activity[:10])
+        )
+
+    current_ids = {row[0] for row in db.query(SiteModelB.site_id).all()}
+    history_ids = {
+        row[0]
+        for row in db.query(SiteModelBHistory.site_id)
+        .filter(SiteModelBHistory.as_of_date == ref_date)
+        .all()
+    }
+    latest_history_dates = dict(
+        db.query(SiteModelBHistory.site_id, func.max(SiteModelBHistory.as_of_date))
+        .group_by(SiteModelBHistory.site_id)
+        .all()
+    )
+    logger.info("Model B histories loaded; starting batched deterministic evaluation.")
+
+    batch_size = 5_000
+    for offset in range(0, len(site_ids), batch_size):
+        current_inserts = []
+        current_updates = []
+        history_inserts = []
+        history_updates = []
+        computed_at = datetime.now(timezone.utc)
+        batch = site_ids[offset:offset + batch_size]
+        for site_id in batch:
+            result = service.model_b.predict(active_dates[site_id], as_of_date=ref_date)
+            stats = result.get("stats", {})
+            values = {
+                "state": result["state"],
+                "confidence": result["confidence"],
+                "reason": result["reason"],
+                "days_since_last": stats.get("days_since_last"),
+                "active_days_windows": {
+                    key: stats.get(f"active_days_{key}", 0)
+                    for key in ("30", "90", "180", "365")
+                },
+                "model_version": MODEL_VERSION,
+                "computed_at": computed_at,
+            }
+            latest_history = latest_history_dates.get(site_id)
+            if latest_history is None or ref_date >= latest_history:
+                current_values = {"site_id": site_id, **values}
+                if site_id in current_ids:
+                    current_updates.append(current_values)
+                else:
+                    current_inserts.append(current_values)
+            history_values = {"site_id": site_id, "as_of_date": ref_date, **values}
+            if site_id in history_ids:
+                history_updates.append(history_values)
+            else:
+                history_inserts.append(history_values)
+
+        if current_updates:
+            db.bulk_update_mappings(SiteModelB, current_updates)
+        if current_inserts:
+            db.bulk_insert_mappings(SiteModelB, current_inserts)
+        if history_updates:
+            db.bulk_update_mappings(SiteModelBHistory, history_updates)
+        if history_inserts:
+            db.bulk_insert_mappings(SiteModelBHistory, history_inserts)
+        db.commit()
+        logger.info(
+            "Materialized daily Model B for %d/%d sites",
+            min(offset + len(batch), len(site_ids)),
+            len(site_ids),
+        )
     return {
         "status": "COMPLETED",
         "as_of_date": ref_date.isoformat(),

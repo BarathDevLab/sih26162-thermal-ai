@@ -20,6 +20,7 @@ from backend.app.services.scheduler import (
     trigger_manual_decay
 )
 from backend.app.services.live_pipeline import get_live_pipeline_service
+from backend.app.services.startup_catchup import get_startup_catchup_status
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,9 @@ def get_status():
     Returns the real-time execution status of APScheduler, FIRMS NRT polling jobs,
     daily Model B temporal decay cron, and the Prithvi worker queue.
     """
-    return get_scheduler_status()
+    status = get_scheduler_status()
+    status["startup_catchup"] = get_startup_catchup_status()
+    return status
 
 
 @router.post(
