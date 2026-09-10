@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import maplibregl, { Map as MapLibreMap, Popup } from 'maplibre-gl';
 import { MapboxOverlay } from '@deck.gl/mapbox';
 import { ColumnLayer } from '@deck.gl/layers';
@@ -17,21 +17,26 @@ interface MapContainerProps {
   isLoading: boolean;
 }
 
-function isSiteVisible(feature: SiteGeoJSONFeature, filters: FilterState): boolean {
+function isSiteVisible(
+  feature: SiteGeoJSONFeature,
+  aClasses: FilterState['aClasses'],
+  bStates: FilterState['bStates'],
+  cStatuses: FilterState['cStatuses']
+): boolean {
   const properties = feature.properties;
-  if (filters.aClasses.length > 0 && !filters.aClasses.includes(properties.a_class)) return false;
-  if (filters.bStates.length > 0 && !filters.bStates.includes(properties.b_state)) return false;
-  if (filters.cStatuses.length > 0 && !filters.cStatuses.includes(properties.c_status)) return false;
+  if (aClasses.length > 0 && !aClasses.includes(properties.a_class)) return false;
+  if (bStates.length > 0 && !bStates.includes(properties.b_state)) return false;
+  if (cStatuses.length > 0 && !cStatuses.includes(properties.c_status)) return false;
   return true;
 }
 
 const MAX_3D_COLUMNS = 2500;
 
-// 1. Photorealistic Earth Satellite Globe Style (ESRI World Imagery)
-const SATELLITE_GLOBE_STYLE: maplibregl.StyleSpecification = {
+// Both raster basemaps stay mounted so switching never destroys operational layers.
+const UNIFIED_BASEMAP_STYLE: maplibregl.StyleSpecification = {
   version: 8,
   projection: {
-    type: 'globe'
+    type: 'mercator'
   },
   sources: {
     'esri-imagery': {
@@ -48,36 +53,7 @@ const SATELLITE_GLOBE_STYLE: maplibregl.StyleSpecification = {
         'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}'
       ],
       tileSize: 256
-    }
-  },
-  layers: [
-    {
-      id: 'esri-imagery-layer',
-      type: 'raster',
-      source: 'esri-imagery',
-      minzoom: 0,
-      maxzoom: 20
     },
-    {
-      id: 'esri-boundaries-layer',
-      type: 'raster',
-      source: 'esri-boundaries',
-      minzoom: 0,
-      maxzoom: 20,
-      paint: {
-        'raster-opacity': 0.65
-      }
-    }
-  ]
-};
-
-// 2. High-Contrast Dark Tactical Style
-const DARK_TACTICAL_STYLE: maplibregl.StyleSpecification = {
-  version: 8,
-  projection: {
-    type: 'mercator'
-  },
-  sources: {
     'esri-dark': {
       type: 'raster',
       tiles: [
@@ -100,14 +76,44 @@ const DARK_TACTICAL_STYLE: maplibregl.StyleSpecification = {
       type: 'raster',
       source: 'esri-dark',
       minzoom: 0,
-      maxzoom: 20
+      maxzoom: 20,
+      paint: {
+        'raster-opacity': 1,
+        'raster-opacity-transition': { duration: 240, delay: 0 }
+      }
     },
     {
       id: 'esri-labels-layer',
       type: 'raster',
       source: 'esri-labels',
       minzoom: 0,
-      maxzoom: 20
+      maxzoom: 20,
+      paint: {
+        'raster-opacity': 1,
+        'raster-opacity-transition': { duration: 240, delay: 0 }
+      }
+    },
+    {
+      id: 'esri-imagery-layer',
+      type: 'raster',
+      source: 'esri-imagery',
+      minzoom: 0,
+      maxzoom: 20,
+      paint: {
+        'raster-opacity': 0,
+        'raster-opacity-transition': { duration: 240, delay: 0 }
+      }
+    },
+    {
+      id: 'esri-boundaries-layer',
+      type: 'raster',
+      source: 'esri-boundaries',
+      minzoom: 0,
+      maxzoom: 20,
+      paint: {
+        'raster-opacity': 0,
+        'raster-opacity-transition': { duration: 240, delay: 0 }
+      }
     }
   ]
 };
@@ -127,7 +133,7 @@ export const MapContainer: React.FC<MapContainerProps> = ({
   const deckOverlayRef = useRef<MapboxOverlay | null>(null);
   const popupRef = useRef<Popup | null>(null);
 
-  const [basemapMode, setBasemapMode] = useState<'SATELLITE' | 'DARK'>('SATELLITE');
+  const [basemapMode, setBasemapMode] = useState<'SATELLITE' | 'DARK'>(is3D ? 'SATELLITE' : 'DARK');
   const [showSatellites, setShowSatellites] = useState<boolean>(true);
   const [showHeatBloom, setShowHeatBloom] = useState<boolean>(true);
   const [showSwaths, setShowSwaths] = useState<boolean>(true);
@@ -162,8 +168,8 @@ export const MapContainer: React.FC<MapContainerProps> = ({
         type: 'fill',
         source: 'satellite-swaths',
         paint: {
-          'fill-color': ['get', 'fillColor'],
-          'fill-opacity': 0.65
+          'fill-color': '#22d3ee',
+          'fill-opacity': 0.045
         }
       });
     }
@@ -173,10 +179,10 @@ export const MapContainer: React.FC<MapContainerProps> = ({
         type: 'line',
         source: 'satellite-swaths',
         paint: {
-          'line-color': ['get', 'strokeColor'],
-          'line-width': 1.5,
-          'line-dasharray': [4, 3],
-          'line-opacity': 0.75
+          'line-color': '#67e8f9',
+          'line-width': 0.8,
+          'line-dasharray': [2, 5],
+          'line-opacity': 0.34
         }
       });
     }
@@ -194,10 +200,17 @@ export const MapContainer: React.FC<MapContainerProps> = ({
         type: 'line',
         source: 'satellite-orbits',
         paint: {
-          'line-color': ['get', 'color'],
-          'line-width': 1.4,
-          'line-dasharray': [3, 2],
-          'line-opacity': 0.8
+          'line-color': [
+            'match', ['get', 'type'],
+            'THERMAL_NRT', '#67e8f9',
+            'EARTH_OBSERVATION', '#a5f3fc',
+            '#52747c'
+          ],
+          'line-width': [
+            'case', ['==', ['get', 'type'], 'THERMAL_NRT'], 1.1, 0.65
+          ],
+          'line-dasharray': [2, 4],
+          'line-opacity': 0.48
         }
       });
     }
@@ -206,7 +219,21 @@ export const MapContainer: React.FC<MapContainerProps> = ({
     if (!map.getSource('satellites-source')) {
       map.addSource('satellites-source', {
         type: 'geojson',
-        data: getSatelliteConstellation(1800) as any
+        data: getSatelliteConstellation(240) as any
+      });
+    }
+    if (!map.getLayer('satellites-primary-halo')) {
+      map.addLayer({
+        id: 'satellites-primary-halo',
+        type: 'circle',
+        source: 'satellites-source',
+        filter: ['has', 'sensor'],
+        paint: {
+          'circle-color': '#67e8f9',
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 1, 7, 8, 12],
+          'circle-blur': 0.78,
+          'circle-opacity': 0.3
+        }
       });
     }
     if (!map.getLayer('satellites-layer')) {
@@ -215,11 +242,18 @@ export const MapContainer: React.FC<MapContainerProps> = ({
         type: 'circle',
         source: 'satellites-source',
         paint: {
-          'circle-color': ['get', 'color'],
-          'circle-radius': 3.5,
-          'circle-stroke-width': 1.2,
-          'circle-stroke-color': '#ffffff',
-          'circle-opacity': 0.95
+          'circle-color': [
+            'case', ['has', 'sensor'], '#d9fbff', '#67e8f9'
+          ],
+          'circle-radius': [
+            'case',
+            ['has', 'sensor'],
+            ['interpolate', ['linear'], ['zoom'], 1, 2.8, 8, 4.2],
+            ['interpolate', ['linear'], ['zoom'], 1, 0.7, 8, 1.5]
+          ],
+          'circle-stroke-width': ['case', ['has', 'sensor'], 1, 0],
+          'circle-stroke-color': '#22d3ee',
+          'circle-opacity': ['case', ['has', 'sensor'], 0.96, 0.46]
         }
       });
     }
@@ -302,7 +336,7 @@ export const MapContainer: React.FC<MapContainerProps> = ({
       });
     }
 
-    // 3b. Tactical Cluster Radar Halo Ring
+    // 3b. Cluster emphasis halo ring
     if (!map.getLayer('cluster-radar-halo')) {
       map.addLayer({
         id: 'cluster-radar-halo',
@@ -385,7 +419,7 @@ export const MapContainer: React.FC<MapContainerProps> = ({
       });
     }
 
-    // 3e. Tactical Cluster Code Badge (TS-14 / MF-08)
+    // 3e. Compact cluster reference badge
     if (!map.getLayer('cluster-tag-labels')) {
       map.addLayer({
         id: 'cluster-tag-labels',
@@ -394,7 +428,7 @@ export const MapContainer: React.FC<MapContainerProps> = ({
         filter: ['has', 'point_count'],
         minzoom: 4.5,
         layout: {
-          'text-field': ['concat', 'TS-', ['to-string', ['slice', ['to-string', ['get', 'point_count']], 0, 2]]],
+          'text-field': ['concat', 'CL-', ['to-string', ['slice', ['to-string', ['get', 'point_count']], 0, 2]]],
           'text-size': 9.5,
           'text-offset': [0, 2.3]
         },
@@ -406,7 +440,7 @@ export const MapContainer: React.FC<MapContainerProps> = ({
       });
     }
 
-    // 3f. Tactical Target Reticle for Selected / Critical Sites
+    // 3f. Focus ring for selected and high-priority sites
     if (!map.getLayer('unclustered-reticle')) {
       map.addLayer({
         id: 'unclustered-reticle',
@@ -493,7 +527,7 @@ export const MapContainer: React.FC<MapContainerProps> = ({
       });
     }
 
-    // 3i. Tactical Site Callout Badges
+    // 3i. Site callout labels
     if (!map.getLayer('tactical-site-callouts')) {
       map.addLayer({
         id: 'tactical-site-callouts',
@@ -540,11 +574,12 @@ export const MapContainer: React.FC<MapContainerProps> = ({
 
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
-      style: initialIs3DRef.current ? SATELLITE_GLOBE_STYLE : DARK_TACTICAL_STYLE,
+      style: UNIFIED_BASEMAP_STYLE,
       center: [78.9629, 20.5937],
       zoom: initialIs3DRef.current ? 2.5 : 4.8,
       pitch: initialIs3DRef.current ? 45 : 0,
       bearing: initialIs3DRef.current ? -12 : 0,
+      renderWorldCopies: false,
       maxPitch: 85
     });
 
@@ -718,7 +753,7 @@ export const MapContainer: React.FC<MapContainerProps> = ({
         }
       });
 
-      // Hover Tooltip Popup with Military/Tactical Target Lock HUD
+      // Compact site intelligence hover card
       const popup = new maplibregl.Popup({
         closeButton: false,
         closeOnClick: false,
@@ -738,7 +773,7 @@ export const MapContainer: React.FC<MapContainerProps> = ({
             <div style="font-family: monospace; font-size: 11px; line-height: 1.45; min-width: 170px;">
               <div style="display: flex; items-center; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.15); padding-bottom: 3px; margin-bottom: 4px;">
                 <span style="font-weight: bold; color: #38bdf8; letter-spacing: 0.5px;">${p.site_id}</span>
-                <span style="color: #64748b; font-size: 9px;">LOC-LOCK</span>
+                <span style="color: #64748b; font-size: 9px;">SITE FOCUS</span>
               </div>
               <div style="color: #94a3b8; font-size: 9.5px;">COORD: ${coordinates[1].toFixed(4)}°N, ${coordinates[0].toFixed(4)}°E</div>
               <div style="margin-top: 5px; display: flex; flex-wrap: wrap; gap: 4px;">
@@ -867,18 +902,15 @@ export const MapContainer: React.FC<MapContainerProps> = ({
     if (!map || basemapMode === newMode) return;
 
     setBasemapMode(newMode);
-    map.setStyle(newMode === 'SATELLITE' ? SATELLITE_GLOBE_STYLE : DARK_TACTICAL_STYLE);
+    const applyBasemap = () => {
+      if (!map.getLayer('esri-imagery-layer') || !map.getLayer('esri-boundaries-layer')) return;
+      const satelliteOpacity = newMode === 'SATELLITE' ? 1 : 0;
+      map.setPaintProperty('esri-imagery-layer', 'raster-opacity', satelliteOpacity);
+      map.setPaintProperty('esri-boundaries-layer', 'raster-opacity', newMode === 'SATELLITE' ? 0.65 : 0);
+    };
 
-    map.once('style.load', () => {
-      setupLayers(map);
-      try {
-        if (typeof (map as any).setProjection === 'function') {
-          (map as any).setProjection({ type: is3D ? 'globe' : 'mercator' });
-        }
-      } catch (e) {
-        console.warn('Error applying projection on basemap change:', e);
-      }
-    });
+    if (map.isStyleLoaded()) applyBasemap();
+    else map.once('style.load', applyBasemap);
   };
 
   // 4. Focus coordinates when explicitly requested (e.g. "Locate" button in Alert Rail)
@@ -902,31 +934,25 @@ export const MapContainer: React.FC<MapContainerProps> = ({
     }
   }, [focusedCoordinates, is3D]);
 
-  // 5. Update GeoJSON Source & deck.gl 3D Volumetric Thermal Columns
+  const { aClasses, bStates, cStatuses } = filters;
+  const filteredFeatures = useMemo<SiteGeoJSONFeature[]>(
+    () => sitesData?.features.filter(
+      feature => isSiteVisible(feature, aClasses, bStates, cStatuses)
+    ) ?? [],
+    [sitesData, aClasses, bStates, cStatuses]
+  );
+
+  // 5. Layer visibility changes do not rebuild or re-cluster the site source.
   useEffect(() => {
     const map = mapRef.current;
-    const deck = deckOverlayRef.current;
-    if (!map || !sitesData) return;
-
-    const filteredFeatures: SiteGeoJSONFeature[] = sitesData.features.filter(
-      feature => isSiteVisible(feature, filters)
-    );
-
-    const source = map.getSource('sites-geojson') as maplibregl.GeoJSONSource | undefined;
-    if (source && typeof source.setData === 'function') {
-      source.setData({
-        type: 'FeatureCollection',
-        features: filteredFeatures
-      });
-    }
+    if (!map) return;
 
     // Toggle satellite layer visibility
-    if (map.getLayer('satellites-layer')) {
-      map.setLayoutProperty('satellites-layer', 'visibility', showSatellites ? 'visible' : 'none');
-    }
-    if (map.getLayer('satellite-orbit-lines')) {
-      map.setLayoutProperty('satellite-orbit-lines', 'visibility', showSatellites ? 'visible' : 'none');
-    }
+    ['satellites-primary-halo', 'satellites-layer', 'satellite-orbit-lines'].forEach((layerId) => {
+      if (map.getLayer(layerId)) {
+        map.setLayoutProperty(layerId, 'visibility', showSatellites ? 'visible' : 'none');
+      }
+    });
 
     // Toggle swath visibility
     if (map.getLayer('satellite-swaths-fill')) {
@@ -940,8 +966,30 @@ export const MapContainer: React.FC<MapContainerProps> = ({
     if (map.getLayer('thermal-heat-bloom')) {
       map.setLayoutProperty('thermal-heat-bloom', 'visibility', showHeatBloom ? 'visible' : 'none');
     }
+  }, [showSatellites, showSwaths, showHeatBloom]);
 
-    // Update 3D Deck.gl Volumetric Columns (Thermal FRP Plumes)
+  // 6. Replace MapLibre data only when the returned sites or filters change.
+  // Zoom, selection, basemap, and sensor toggles must not trigger GeoJSON
+  // serialization and Supercluster reconstruction for the same dataset.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const source = map.getSource('sites-geojson') as maplibregl.GeoJSONSource | undefined;
+    if (source && typeof source.setData === 'function') {
+      source.setData({
+        type: 'FeatureCollection',
+        features: filteredFeatures
+      });
+    }
+  }, [filteredFeatures]);
+
+  // 7. Update deck.gl independently; zoom affects columns without rebuilding
+  // the MapLibre source used by the normal 2D site and cluster layers.
+  useEffect(() => {
+    const map = mapRef.current;
+    const deck = deckOverlayRef.current;
+    if (!map || !deck) return;
+
     if (deck) {
       try {
         // At national/regional zoom levels MapLibre clusters are substantially
@@ -1000,21 +1048,26 @@ export const MapContainer: React.FC<MapContainerProps> = ({
         console.warn('Deck.gl layer update error:', deckUpdateErr);
       }
     }
-  }, [sitesData, filters, is3D, selectedSiteId, showSatellites, showHeatBloom, showSwaths, show3DColumns, viewZoom]);
+  }, [filteredFeatures, filters.spikeHeightScale, is3D, show3DColumns, viewZoom]);
 
-  const visibleSiteCount = sitesData?.features.reduce(
-    (count, feature) => count + (isSiteVisible(feature, filters) ? 1 : 0),
-    0
-  ) ?? 0;
+  const visibleSiteCount = filteredFeatures.length;
 
   return (
-    <div className="relative w-full h-full flex-1 bg-[#02040a] overflow-hidden">
+    <div className="command-map relative w-full h-full flex-1 overflow-hidden">
       <div ref={mapContainerRef} className="absolute inset-0 w-full h-full" />
 
-      {/* Top-Right Tactical HUD Control Cluster */}
-      <div className="absolute top-4 right-4 z-10 flex flex-col items-end gap-2">
+      <div className="map-vignette pointer-events-none absolute inset-0 z-[1]" aria-hidden="true" />
+      <div className="map-reticle pointer-events-none absolute inset-0 z-[2]" aria-hidden="true">
+        <span className="reticle-corner reticle-tl" />
+        <span className="reticle-corner reticle-tr" />
+        <span className="reticle-corner reticle-bl" />
+        <span className="reticle-corner reticle-br" />
+      </div>
+
+      {/* Map display controls */}
+      <div className="map-control-cluster absolute top-4 right-4 z-10 flex flex-col items-end gap-2">
         {/* Main Basemap & Sensor Swath Group */}
-        <div className="flex items-center gap-1.5 p-1 rounded-lg tactical-glass shadow-2xl">
+        <div className="map-hud-panel map-controls-row flex items-center gap-1.5 p-1 rounded-lg tactical-glass shadow-2xl">
           {/* Basemap Switcher */}
           <div className="flex bg-black/40 border border-white/10 rounded p-0.5 text-[10px] font-mono">
             <button
@@ -1026,7 +1079,7 @@ export const MapContainer: React.FC<MapContainerProps> = ({
               }`}
             >
               <Globe className="w-3 h-3" />
-              <span>ORBITAL GLOBE</span>
+              <span>EARTH VIEW</span>
             </button>
             <button
               onClick={() => handleToggleBasemap('DARK')}
@@ -1037,7 +1090,7 @@ export const MapContainer: React.FC<MapContainerProps> = ({
               }`}
             >
               <Layers className="w-3 h-3" />
-              <span>DARK CANVAS</span>
+              <span>DARK MAP</span>
             </button>
           </div>
 
@@ -1081,10 +1134,10 @@ export const MapContainer: React.FC<MapContainerProps> = ({
                 ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300 font-bold shadow-[0_0_10px_rgba(16,185,129,0.2)]'
                 : 'bg-black/30 border-white/10 text-slate-400 hover:text-slate-200'
             }`}
-            title="Toggle 3D Satellite Constellation"
+            title="Toggle reference satellite tracks"
           >
             <Satellite className="w-3 h-3 text-emerald-400" />
-            <span>SATELLITES ({showSatellites ? '1.8K' : 'OFF'})</span>
+            <span>SENSOR TRACKS</span>
           </button>
 
           {/* VIIRS Swaths Toggle */}
@@ -1102,37 +1155,54 @@ export const MapContainer: React.FC<MapContainerProps> = ({
           </button>
         </div>
 
+        {showSatellites && (
+          <div className="sensor-overlay-card">
+            <span className="sensor-overlay-icon">
+              <Satellite className="w-3.5 h-3.5" />
+            </span>
+            <span className="sensor-overlay-copy">
+              <strong>EARTH OBSERVATION TRACKS</strong>
+              <small>VIIRS · HLS · REFERENCE ORBITS</small>
+            </span>
+            <span className="sensor-overlay-state">DISPLAY</span>
+          </div>
+        )}
+
         {/* 3D Spherical Atmosphere Status Badge */}
         {is3D && (
           <div className="flex items-center gap-2 px-3 py-1 rounded tactical-glass border border-cyan-500/30 text-[10px] font-mono text-cyan-300 shadow-[0_0_15px_rgba(6,182,212,0.15)]">
             <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping-slow" />
-            <span>3D SPHERICAL GLOBE &middot; ATMOSPHERE ACTIVE</span>
+            <span>EARTH VIEW &middot; PERSPECTIVE ACTIVE</span>
           </div>
         )}
       </div>
 
-      {/* Bottom-Left Viewport Operational Telemetry Bar */}
-      <div className="absolute bottom-4 left-4 z-10 hidden sm:flex items-center gap-3 px-3.5 py-1.5 rounded-lg tactical-glass border border-white/15 text-[10px] font-mono shadow-2xl">
-        <div className="flex items-center gap-1.5 text-slate-300">
+      {/* Secondary-row viewport telemetry; kept clear of the map controls. */}
+      <div className="viewport-telemetry absolute z-10 hidden sm:grid rounded-lg tactical-glass border border-white/15 font-mono shadow-2xl">
+        <div className="viewport-telemetry-cell viewport-telemetry-rendered text-slate-300">
           <Sparkles className="w-3 h-3 text-cyan-400" />
-          <span className="text-slate-400">RENDERED:</span>
-          <span className="font-bold text-white">{visibleSiteCount.toLocaleString()}</span>
-          {sitesData && sitesData.total_count > sitesData.returned_count && (
-            <span className="text-slate-500">
-              of {sitesData.total_count.toLocaleString()} matched
-            </span>
-          )}
-          {isLoading && <span className="text-cyan-300 animate-pulse">UPDATING</span>}
+          <span className="viewport-telemetry-copy">
+            <span className="viewport-telemetry-label">RENDERED</span>
+            <strong>
+              {visibleSiteCount.toLocaleString()}
+              {sitesData && sitesData.total_count > sitesData.returned_count && (
+                <small> / {sitesData.total_count.toLocaleString()}</small>
+              )}
+              {isLoading && <small className="text-cyan-300 animate-pulse"> · UPDATING</small>}
+            </strong>
+          </span>
         </div>
-        <div className="w-[1px] h-3 bg-white/20" />
-        <div className="flex items-center gap-1.5 text-slate-300">
-          <span className="text-slate-400">OPTICAL RESOLUTION:</span>
-          <span className="font-bold text-amber-400">375m VIIRS</span>
+        <div className="viewport-telemetry-cell text-slate-300">
+          <span className="viewport-telemetry-copy">
+            <span className="viewport-telemetry-label">OPTICAL RESOLUTION</span>
+            <strong className="text-amber-400">375m VIIRS</strong>
+          </span>
         </div>
-        <div className="w-[1px] h-3 bg-white/20" />
-        <div className="flex items-center gap-1.5 text-slate-300">
-          <span className="text-slate-400">PHYSICAL CLUSTER:</span>
-          <span className="font-bold text-emerald-400">750m DBSCAN</span>
+        <div className="viewport-telemetry-cell text-slate-300">
+          <span className="viewport-telemetry-copy">
+            <span className="viewport-telemetry-label">PHYSICAL CLUSTER</span>
+            <strong className="text-emerald-400">750m DBSCAN</strong>
+          </span>
         </div>
       </div>
     </div>

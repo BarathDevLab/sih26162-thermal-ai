@@ -34,12 +34,16 @@ import {
 interface SiteDrawerProps {
   site: SiteDetail | null;
   asOfDate?: string;
+  onRefreshSite: (siteId: string, asOfDate?: string) => Promise<SiteDetail>;
   onClose: () => void;
 }
 
 type TabType = 'OVERVIEW' | 'TIMELINE' | 'EVIDENCE' | 'SATELLITE' | 'RAW_FIRMS';
 
-export const SiteDrawer: React.FC<SiteDrawerProps> = ({ site, asOfDate, onClose }) => {
+const PRITHVI_STATUS_POLL_MS = 4_000;
+const PRITHVI_STATUS_POLL_LIMIT_MS = 10 * 60_000;
+
+export const SiteDrawer: React.FC<SiteDrawerProps> = ({ site, asOfDate, onRefreshSite, onClose }) => {
   const [activeTab, setActiveTab] = useState<TabType>('OVERVIEW');
   const [timelineData, setTimelineData] = useState<SiteTimelineResponse | null>(null);
   const [evidenceData, setEvidenceData] = useState<SiteEvidenceResponse | null>(null);
@@ -62,30 +66,86 @@ export const SiteDrawer: React.FC<SiteDrawerProps> = ({ site, asOfDate, onClose 
       fetchSiteEvidence(siteId, 5000, asOfDate),
       fetchSiteDetections(siteId, asOfDate),
       fetchSiteImagery(siteId, asOfDate)
-    ]).then(([timeline, evidence, detections, imagery]) => {
+    ]).then(async ([timeline, evidence, detections, imagery]) => {
       if (!active) return;
       if (timeline.status === 'fulfilled') setTimelineData(timeline.value);
       if (evidence.status === 'fulfilled') setEvidenceData(evidence.value);
       if (detections.status === 'fulfilled') setDetectionsData(detections.value);
       if (imagery.status === 'fulfilled') setImageryData(imagery.value);
       setLoading(false);
+
+      // The live imagery read queues eligible A-Core uncertainty cases. Refresh once
+      // after that request so the drawer can observe the persisted PENDING state.
+      if (asOfDate === undefined) {
+        try {
+          await onRefreshSite(siteId);
+        } catch (error) {
+          console.error(`Failed to refresh Model A status for ${siteId}:`, error);
+        }
+      }
     });
 
     return () => {
       active = false;
     };
-  }, [siteId, asOfDate]);
+  }, [siteId, asOfDate, onRefreshSite]);
+
+  const prithviStatus = site?.model_a?.prithvi_status;
+
+  useEffect(() => {
+    if (!siteId || asOfDate !== undefined || prithviStatus !== 'PENDING') return;
+
+    let active = true;
+    let timer: number | undefined;
+    const deadline = Date.now() + PRITHVI_STATUS_POLL_LIMIT_MS;
+
+    const poll = async () => {
+      const [imagery, detail] = await Promise.allSettled([
+        fetchSiteImagery(siteId),
+        onRefreshSite(siteId)
+      ]);
+      if (!active) return;
+
+      if (imagery.status === 'fulfilled') setImageryData(imagery.value);
+      if (imagery.status === 'rejected') {
+        console.error(`Failed to refresh Prithvi imagery for ${siteId}:`, imagery.reason);
+      }
+      if (detail.status === 'rejected') {
+        console.error(`Failed to refresh Model A inference for ${siteId}:`, detail.reason);
+      }
+
+      const nextStatus = detail.status === 'fulfilled'
+        ? detail.value.model_a?.prithvi_status
+        : undefined;
+      if (nextStatus === 'PENDING' && Date.now() < deadline) {
+        timer = window.setTimeout(poll, PRITHVI_STATUS_POLL_MS);
+      }
+    };
+
+    timer = window.setTimeout(poll, 1_500);
+    return () => {
+      active = false;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [siteId, asOfDate, prithviStatus, onRefreshSite]);
 
   if (!site) return null;
 
-  const activePrithviProb = site.model_a?.prithvi_probability ?? (imageryData[0]?.prithvi_probability ?? null);
-  const activePrithviStatus = site.model_a?.prithvi_status ?? imageryData[0]?.status ?? 'UNAVAILABLE';
+  const availableImagery = imageryData.find((item) => item.prithvi_probability !== null);
+  const activePrithviProb = site.model_a?.prithvi_probability ?? availableImagery?.prithvi_probability ?? null;
+  const activePrithviStatus = site.model_a?.prithvi_status === 'PENDING'
+    ? 'PENDING'
+    : activePrithviProb !== null
+    ? 'AVAILABLE'
+    : site.model_a?.prithvi_status ?? imageryData[0]?.status ?? 'UNAVAILABLE';
   const activePrithviValue = activePrithviProb !== null
     ? `${(activePrithviProb * 100).toFixed(1)}%`
     : activePrithviStatus === 'PENDING' ? 'PENDING' : 'N/A';
+  const prithviRescued = site.model_a?.decision === 'INDUSTRIAL_PRITHVI_RESCUE';
+  const prithviPending = activePrithviStatus === 'PENDING';
 
   return (
-    <aside className="w-[460px] bg-[#070a12]/95 border-l border-white/10 flex flex-col h-full z-20 shrink-0 text-xs overflow-hidden select-none backdrop-blur tactical-glass shadow-2xl">
+    <aside className="intel-drawer w-[460px] flex flex-col h-full z-20 shrink-0 text-xs overflow-hidden select-none shadow-2xl">
       {/* Header Bar */}
       <div className="p-3.5 border-b border-white/10 bg-[#090e1a] flex items-center justify-between">
         <div>
@@ -157,7 +217,7 @@ export const SiteDrawer: React.FC<SiteDrawerProps> = ({ site, asOfDate, onClose 
                 <div className="flex items-center justify-between">
                   <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-red-500/20 text-red-300 border border-red-500/40 flex items-center gap-1.5 font-mono">
                     <DecisionEngineIcon className="w-3.5 h-3.5 text-red-400" />
-                    {site.active_alert.alert_level} INCIDENT
+                    {site.active_alert.alert_level} PRIORITY
                   </span>
                   <span className="font-mono text-[10px] text-red-300/80">
                     {site.active_alert.alert_type}
@@ -179,13 +239,15 @@ export const SiteDrawer: React.FC<SiteDrawerProps> = ({ site, asOfDate, onClose 
             )}
 
             {/* Model A Intelligence Card */}
-            <div className="p-3 rounded-lg bg-[#0b1120] border border-white/10 space-y-2">
+            <div className={`intel-card intel-card-a model-a-card p-3 rounded-lg bg-[#0b1120] border border-white/10 space-y-2 ${
+              prithviPending ? 'prithvi-evaluating' : ''
+            } ${prithviRescued ? 'prithvi-rescued' : ''}`}>
               <div className="flex items-center justify-between">
                 <span className="text-[11px] font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5 font-mono">
                   <ModelAIcon className="w-4 h-4 text-amber-400" />
                   Model A: Source Identity
                 </span>
-                <span className={`text-[10px] font-bold font-mono px-2 py-0.5 rounded border ${
+                <span className={`model-a-classification-chip text-[10px] font-bold font-mono px-2 py-0.5 rounded border ${
                   site.model_a?.class_name === 'INDUSTRIAL'
                     ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
                     : site.model_a?.class_name === 'NONINDUSTRIAL'
@@ -209,9 +271,8 @@ export const SiteDrawer: React.FC<SiteDrawerProps> = ({ site, asOfDate, onClose 
                   <div className="font-bold text-cyan-300 mt-0.5 text-xs flex items-center gap-1.5">
                     <span>{activePrithviValue}</span>
                     <span className={`text-[8.5px] px-1 py-0.5 rounded font-mono font-normal border ${
-                      activePrithviStatus === 'RESCUED' ? 'bg-amber-500/20 text-amber-300 border-amber-500/40' :
-                      activePrithviStatus === 'CONFIRMED' ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' :
-                      activePrithviStatus === 'EVALUATED' ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40' :
+                      activePrithviStatus === 'AVAILABLE' ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40' :
+                      activePrithviStatus === 'PENDING' ? 'prithvi-pending-chip bg-cyan-500/10 text-cyan-300 border-cyan-500/30' :
                       'bg-slate-500/20 text-slate-400 border-slate-500/40'
                     }`}>
                       {activePrithviStatus}
@@ -219,6 +280,21 @@ export const SiteDrawer: React.FC<SiteDrawerProps> = ({ site, asOfDate, onClose 
                   </div>
                 </div>
               </div>
+              {prithviPending && (
+                <div className="prithvi-progress-row" role="status" aria-live="polite">
+                  <span className="prithvi-progress-orbit" aria-hidden="true" />
+                  <span>
+                    VISUAL EVALUATION QUEUED
+                    <small>Retrieving genuine HLS evidence; this card refreshes automatically.</small>
+                  </span>
+                </div>
+              )}
+              {prithviRescued && (
+                <div className="prithvi-rescue-row" role="status" aria-live="polite">
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>UNKNOWN <b>→</b> INDUSTRIAL · PRITHVI RESCUE VERIFIED</span>
+                </div>
+              )}
               <button
                 onClick={() => setActiveTab('SATELLITE')}
                 className="w-full mt-1.5 py-1.5 px-2 rounded bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 text-[10px] font-mono flex items-center justify-center gap-1.5 transition-colors"
@@ -229,7 +305,7 @@ export const SiteDrawer: React.FC<SiteDrawerProps> = ({ site, asOfDate, onClose 
             </div>
 
             {/* Model B Intelligence Card */}
-            <div className="p-3 rounded-lg bg-[#0b1120] border border-white/10 space-y-2">
+            <div className="intel-card intel-card-b p-3 rounded-lg bg-[#0b1120] border border-white/10 space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-[11px] font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5 font-mono">
                   <ModelBIcon className="w-4 h-4 text-cyan-400" />
@@ -265,7 +341,7 @@ export const SiteDrawer: React.FC<SiteDrawerProps> = ({ site, asOfDate, onClose 
             </div>
 
             {/* Model C Intelligence Card */}
-            <div className="p-3 rounded-lg bg-[#0b1120] border border-white/10 space-y-2">
+            <div className="intel-card intel-card-c p-3 rounded-lg bg-[#0b1120] border border-white/10 space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-[11px] font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5 font-mono">
                   <ModelCIcon className="w-4 h-4 text-orange-400" />
@@ -317,7 +393,7 @@ export const SiteDrawer: React.FC<SiteDrawerProps> = ({ site, asOfDate, onClose 
 
             {/* Land Cover & WorldCover Composition */}
             {site.land_cover && (
-              <div className="p-3 rounded bg-[#0b1120] border border-white/5 space-y-1.5">
+              <div className="intel-card intel-card-neutral p-3 rounded bg-[#0b1120] border border-white/5 space-y-1.5">
                 <span className="text-[11px] font-bold text-slate-300 uppercase tracking-wider block">
                   WorldCover 10m Composition
                 </span>
@@ -409,6 +485,14 @@ export const SiteDrawer: React.FC<SiteDrawerProps> = ({ site, asOfDate, onClose 
                       ))}
                     </tbody>
                   </table>
+                </div>
+              </div>
+            ) : prithviPending ? (
+              <div className="prithvi-empty-progress" role="status" aria-live="polite">
+                <span className="prithvi-progress-orbit" aria-hidden="true" />
+                <div className="text-cyan-200 font-bold tracking-wider">HLS / PRITHVI EVALUATION IN PROGRESS</div>
+                <div className="mt-2 text-[10px] text-slate-500">
+                  Server-side retrieval and inference are asynchronous. Results will appear here automatically.
                 </div>
               </div>
             ) : (
@@ -521,7 +605,7 @@ export const SiteDrawer: React.FC<SiteDrawerProps> = ({ site, asOfDate, onClose 
             {imageryData.length > 0 ? (
               <div className="space-y-3">
                 {imageryData.map((img) => (
-                  <div key={img.cache_id} className="p-3 rounded-lg bg-[#0b1120] border border-white/10 space-y-3">
+                  <div key={img.cache_id} className="intel-card intel-card-b p-3 rounded-lg bg-[#0b1120] border border-white/10 space-y-3">
                     <div className="flex items-center justify-between">
                       <span className="text-cyan-300 font-bold">{img.product || 'HLS'}</span>
                       <span className={`text-[9px] px-2 py-0.5 rounded border ${

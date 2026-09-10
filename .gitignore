@@ -46,7 +46,8 @@ data/backfill_2026/*.log
 data/backfill_2026/alert_burden_audit.json
 data/database_snapshots/
 data/database_snapshots*.zip
-
+data/hls_cache/
+data/runtime_logs/
 *.pt
 *.pth
 *.onnx

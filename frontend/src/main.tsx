@@ -6,7 +6,7 @@ import { ErrorBoundary } from './components/ErrorBoundary.tsx'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <ErrorBoundary fallbackTitle="SIH26162 Operational Cockpit Error">
+    <ErrorBoundary fallbackTitle="SIH26162 interface error">
       <App />
     </ErrorBoundary>
   </StrictMode>,

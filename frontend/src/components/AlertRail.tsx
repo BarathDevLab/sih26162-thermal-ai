@@ -15,6 +15,34 @@ interface AlertRailProps {
   onAlertAcknowledged: (alertId: string) => void;
 }
 
+const severityStyles: Record<string, { dot: string; badge: string }> = {
+  CRITICAL: {
+    dot: 'bg-red-500 shadow-[0_0_8px_#ef4444] animate-pulse',
+    badge: 'bg-red-500/20 text-red-300 border-red-500/40'
+  },
+  HIGH: {
+    dot: 'bg-orange-400 shadow-[0_0_7px_rgba(251,146,60,0.7)]',
+    badge: 'bg-orange-500/20 text-orange-300 border-orange-500/40'
+  },
+  MEDIUM: {
+    dot: 'bg-amber-400',
+    badge: 'bg-amber-500/15 text-amber-200 border-amber-500/35'
+  },
+  LOW: {
+    dot: 'bg-cyan-500',
+    badge: 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30'
+  }
+};
+
+function compactSiteId(siteId: string): string {
+  const promotedPrefix = 'INDIA_PROMOTED_';
+  if (siteId.startsWith(promotedPrefix)) {
+    return `NEW SITE · ${siteId.slice(-10).toUpperCase()}`;
+  }
+  if (siteId.length > 30) return `${siteId.slice(0, 18)}…${siteId.slice(-8)}`;
+  return siteId;
+}
+
 export const AlertRail: React.FC<AlertRailProps> = ({
   alerts,
   onJumpToSite,
@@ -39,7 +67,7 @@ export const AlertRail: React.FC<AlertRailProps> = ({
   const criticalCount = alerts.filter(a => a.alert_level === 'CRITICAL').length;
 
   return (
-    <div className="absolute bottom-4 left-84 z-20 w-[410px] max-w-[calc(100vw-360px)] shadow-2xl transition-all select-none">
+    <div className="alert-console absolute bottom-4 right-4 z-20 w-[390px] max-w-[calc(100vw-360px)] shadow-2xl transition-all select-none">
       {/* Header Bar */}
       <div
         onClick={() => setCollapsed(!collapsed)}
@@ -48,11 +76,16 @@ export const AlertRail: React.FC<AlertRailProps> = ({
         <div className="flex items-center gap-2.5">
           <DecisionEngineIcon className="w-4 h-4 text-red-400 drop-shadow-[0_0_6px_rgba(239,68,68,0.5)]" />
           <span className="font-bold text-slate-100 text-xs tracking-wider font-mono uppercase">
-            INCIDENT RADAR
+            PRIORITY ALERTS
           </span>
-          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-red-500/20 text-red-300 border border-red-500/40 font-semibold">
-            {criticalCount} CRITICAL
+          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/30 font-semibold">
+            {alerts.length} ACTIVE
           </span>
+          {criticalCount > 0 && (
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-red-500/20 text-red-300 border border-red-500/40 font-semibold">
+              {criticalCount} CRITICAL
+            </span>
+          )}
         </div>
 
         <button className="text-slate-400 hover:text-slate-200 transition-colors">
@@ -70,28 +103,25 @@ export const AlertRail: React.FC<AlertRailProps> = ({
           ) : (
             alerts.slice(0, 20).map((alert) => {
               const isCritical = alert.alert_level === 'CRITICAL';
+              const severity = severityStyles[alert.alert_level] ?? severityStyles.LOW;
               return (
                 <div
                   key={alert.alert_id}
                   onClick={() => onJumpToSite(alert.site_id, alert.latitude ?? undefined, alert.longitude ?? undefined)}
-                  className={`p-2.5 rounded-lg border transition-all cursor-pointer ${
+                  className={`alert-card p-2.5 rounded-lg border transition-all cursor-pointer ${
                     isCritical
                       ? 'bg-red-950/25 border-red-500/40 hover:border-red-500/80 shadow-[0_0_12px_rgba(239,68,68,0.15)]'
                       : 'bg-[#0c1424] border-white/10 hover:border-white/25 hover:bg-[#101b30]'
                   }`}
                 >
-                  <div className="flex items-center justify-between font-mono text-[10px] mb-1">
-                    <div className="flex items-center gap-1.5">
-                      <span className={`w-2 h-2 rounded-full ${isCritical ? 'bg-red-500 shadow-[0_0_8px_#ef4444] animate-pulse' : 'bg-orange-400'}`} />
-                      <span className="font-bold text-cyan-300">
-                        {alert.site_id}
+                  <div className="flex items-center justify-between gap-2 font-mono text-[10px] mb-1">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span className={`w-2 h-2 shrink-0 rounded-full ${severity.dot}`} />
+                      <span className="font-bold text-cyan-300 truncate" title={alert.site_id}>
+                        {compactSiteId(alert.site_id)}
                       </span>
                     </div>
-                    <span className={`px-2 py-0.5 rounded font-bold tracking-wider text-[9px] border ${
-                      isCritical
-                        ? 'bg-red-500/20 text-red-300 border-red-500/40'
-                        : 'bg-orange-500/20 text-orange-300 border-orange-500/40'
-                    }`}>
+                    <span className={`shrink-0 px-2 py-0.5 rounded font-bold tracking-wider text-[9px] border ${severity.badge}`}>
                       {alert.alert_level}
                     </span>
                   </div>

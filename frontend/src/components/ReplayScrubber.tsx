@@ -65,7 +65,7 @@ export const ReplayScrubber: React.FC<ReplayScrubberProps> = ({
   };
 
   return (
-    <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 w-[600px] max-w-[calc(100vw-340px)] bg-[#070a12]/95 border border-amber-500/40 rounded-lg p-3 shadow-2xl backdrop-blur select-none">
+    <div className="replay-console absolute bottom-4 left-1/2 -translate-x-1/2 z-20 w-[620px] max-w-[calc(100vw-340px)] p-3 shadow-2xl select-none">
       {/* Top Telemetry Header */}
       <div className="flex items-center justify-between pb-2 mb-2 border-b border-white/10 text-xs">
         <div className="flex items-center gap-2">

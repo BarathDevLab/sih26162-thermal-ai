@@ -41,8 +41,25 @@ const DEFAULT_FILTERS: FilterState = {
   spikeHeightScale: 2.0
 };
 
-const VIEWPORT_REQUEST_DEBOUNCE_MS = 180;
+const VIEWPORT_REQUEST_DEBOUNCE_MS = 90;
+const VIEWPORT_ZOOM_OUT_DEBOUNCE_MS = 0;
 const VIEWPORT_CACHE_SIZE = 24;
+const VIEWPORT_CACHE_FRESH_MS = 30_000;
+
+interface ViewportCacheEntry {
+  data: SiteGeoJSONFeatureCollection;
+  fetchedAt: number;
+}
+
+function canEnterLiveMode(health: HealthCheck | null, stats: SystemStats | null): boolean {
+  if (!health) return stats?.data_mode === 'LIVE';
+  if (health.database !== 'connected') return false;
+  return (
+    health.status === 'READY' ||
+    health.status === 'DEGRADED_PRITHVI_UNAVAILABLE' ||
+    stats?.data_mode === 'LIVE'
+  );
+}
 
 function viewportLimit(bbox: [number, number, number, number]): number {
   const longitudeSpan = Math.abs(bbox[2] - bbox[0]);
@@ -58,7 +75,13 @@ function viewportCacheKey(
   bbox: [number, number, number, number],
   limit: number
 ): string {
-  return [mode, mode === 'REPLAY' ? replayDate : '', limit, ...bbox.map(value => value.toFixed(4))].join('|');
+  const span = Math.max(Math.abs(bbox[2] - bbox[0]), Math.abs(bbox[3] - bbox[1]));
+  const precision = span >= 20 ? 2 : span >= 8 ? 3 : 4;
+  return [mode, mode === 'REPLAY' ? replayDate : '', limit, ...bbox.map(value => value.toFixed(precision))].join('|');
+}
+
+function viewportArea(bbox: [number, number, number, number]): number {
+  return Math.abs((bbox[2] - bbox[0]) * (bbox[3] - bbox[1]));
 }
 
 export default function App() {
@@ -75,13 +98,16 @@ export default function App() {
   const [sitesError, setSitesError] = useState<string | null>(null);
   const sitesRequestId = useRef(0);
   const sitesAbortController = useRef<AbortController | null>(null);
-  const sitesCache = useRef<Map<string, SiteGeoJSONFeatureCollection>>(new Map());
+  const sitesCache = useRef<Map<string, ViewportCacheEntry>>(new Map());
+  const previousViewportBBox = useRef<[number, number, number, number] | undefined>(undefined);
   const [selectedSiteId, setSelectedSiteId] = useState<string | null>(null);
   const [selectedSite, setSelectedSite] = useState<SiteDetail | null>(null);
+  const selectedSiteRequestId = useRef(0);
 
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const [sseConnected, setSseConnected] = useState<boolean>(false);
   const [focusedCoordinates, setFocusedCoordinates] = useState<[number, number] | null>(null);
+  const liveAvailable = canEnterLiveMode(health, stats);
 
   const loadedModelACounts = useMemo(() => {
     const counts = {
@@ -99,22 +125,26 @@ export default function App() {
   // 1. Initial Health, Stats, and Alerts Load
   useEffect(() => {
     const initTelemetry = async () => {
-      try {
-        const [h, s, a] = await Promise.all([
-          fetchHealth(),
-          fetchStats(),
-          fetchAlerts()
-        ]);
-        setHealth(h);
-        setStats(s);
-        setAlerts(a.alerts);
-        const liveReady = h.status === 'READY' || h.status === 'DEGRADED_PRITHVI_UNAVAILABLE';
-        setMode(liveReady ? 'LIVE' : 'REPLAY');
-        if (!liveReady && s.latest_firms_date) {
-          setReplayDate(s.latest_firms_date);
-        }
-      } catch (err) {
-        console.error('Telemetry bootstrap failed:', err);
+      const [healthResult, statsResult, alertsResult] = await Promise.allSettled([
+        fetchHealth(),
+        fetchStats(),
+        fetchAlerts()
+      ]);
+
+      const nextHealth = healthResult.status === 'fulfilled' ? healthResult.value : null;
+      const nextStats = statsResult.status === 'fulfilled' ? statsResult.value : null;
+      if (nextHealth) setHealth(nextHealth);
+      if (nextStats) setStats(nextStats);
+      if (alertsResult.status === 'fulfilled') setAlerts(alertsResult.value.alerts);
+
+      if (healthResult.status === 'rejected') console.error('Health bootstrap failed:', healthResult.reason);
+      if (statsResult.status === 'rejected') console.error('Statistics bootstrap failed:', statsResult.reason);
+      if (alertsResult.status === 'rejected') console.error('Alert bootstrap failed:', alertsResult.reason);
+
+      const nextLiveAvailable = canEnterLiveMode(nextHealth, nextStats);
+      setMode(nextLiveAvailable ? 'LIVE' : 'REPLAY');
+      if (!nextLiveAvailable && nextStats?.latest_firms_date) {
+        setReplayDate(nextStats.latest_firms_date);
       }
     };
 
@@ -124,26 +154,21 @@ export default function App() {
   // A stale backend catches up in the background. Poll readiness so the UI
   // enables Live automatically when the new common snapshot is published.
   useEffect(() => {
-    const liveReady = health?.status === 'READY' || health?.status === 'DEGRADED_PRITHVI_UNAVAILABLE';
-    if (!health || liveReady) return;
+    if (liveAvailable) return;
 
     const interval = window.setInterval(async () => {
-      try {
-        const nextHealth = await fetchHealth();
-        setHealth(nextHealth);
-        const nextLiveReady = nextHealth.status === 'READY' || nextHealth.status === 'DEGRADED_PRITHVI_UNAVAILABLE';
-        if (nextLiveReady) {
-          const nextStats = await fetchStats();
-          setStats(nextStats);
-          setMode('LIVE');
-        }
-      } catch (err) {
-        console.error('Readiness refresh failed:', err);
+      const [healthResult, statsResult] = await Promise.allSettled([fetchHealth(), fetchStats()]);
+      const nextHealth = healthResult.status === 'fulfilled' ? healthResult.value : health;
+      const nextStats = statsResult.status === 'fulfilled' ? statsResult.value : stats;
+      if (healthResult.status === 'fulfilled') setHealth(healthResult.value);
+      if (statsResult.status === 'fulfilled') setStats(statsResult.value);
+      if (canEnterLiveMode(nextHealth, nextStats)) {
+        setMode('LIVE');
       }
     }, 10_000);
 
     return () => window.clearInterval(interval);
-  }, [health]);
+  }, [health, stats, liveAvailable]);
 
   // 2. Real-Time Alert Stream Subscription
   useEffect(() => {
@@ -177,13 +202,20 @@ export default function App() {
     const limit = viewportLimit(currentBBox);
     const cacheKey = viewportCacheKey(mode, replayDate, currentBBox, limit);
     const cached = sitesCache.current.get(cacheKey);
+    sitesAbortController.current?.abort();
+    sitesAbortController.current = null;
     if (cached) {
       sitesCache.current.delete(cacheKey);
       sitesCache.current.set(cacheKey, cached);
-      setSitesData(cached);
+      setSitesData(cached.data);
+      setSitesError(null);
+      const isFresh = mode === 'REPLAY' || Date.now() - cached.fetchedAt < VIEWPORT_CACHE_FRESH_MS;
+      if (isFresh) {
+        setSitesLoading(false);
+        return;
+      }
     }
 
-    sitesAbortController.current?.abort();
     const controller = new AbortController();
     sitesAbortController.current = controller;
     setSitesLoading(true);
@@ -204,7 +236,7 @@ export default function App() {
       }
 
       if (requestId === sitesRequestId.current) {
-        sitesCache.current.set(cacheKey, data);
+        sitesCache.current.set(cacheKey, { data, fetchedAt: Date.now() });
         while (sitesCache.current.size > VIEWPORT_CACHE_SIZE) {
           const oldestKey = sitesCache.current.keys().next().value;
           if (oldestKey === undefined) break;
@@ -230,12 +262,57 @@ export default function App() {
 
   useEffect(() => {
     if (!currentBBox) return;
-    const task = window.setTimeout(() => void loadSites(), VIEWPORT_REQUEST_DEBOUNCE_MS);
+    const previous = previousViewportBBox.current;
+    const isZoomingOut = previous !== undefined && viewportArea(currentBBox) > viewportArea(previous) * 1.08;
+    previousViewportBBox.current = currentBBox;
+    const delay = isZoomingOut ? VIEWPORT_ZOOM_OUT_DEBOUNCE_MS : VIEWPORT_REQUEST_DEBOUNCE_MS;
+    const task = window.setTimeout(() => void loadSites(), delay);
     return () => {
       window.clearTimeout(task);
       sitesAbortController.current?.abort();
     };
   }, [currentBBox, loadSites]);
+
+  const refreshSelectedSite = useCallback(async (siteId: string, asOfDate?: string) => {
+    const requestId = ++selectedSiteRequestId.current;
+    const detail = await fetchSiteDetail(siteId, asOfDate);
+    if (requestId !== selectedSiteRequestId.current) {
+      return detail;
+    }
+
+    setSelectedSite(detail);
+
+    // A completed live Prithvi rescue must be reflected on the selected marker too.
+    // Replay snapshots remain immutable and are never patched with a current result.
+    const modelA = detail.model_a;
+    if (asOfDate === undefined && modelA) {
+      setSitesData((previous) => {
+        if (!previous) return previous;
+        let changed = false;
+        const features = previous.features.map((feature) => {
+          if (feature.properties.site_id !== siteId) return feature;
+          if (
+            feature.properties.a_class === modelA.class_name &&
+            feature.properties.a_prob === modelA.core_probability
+          ) {
+            return feature;
+          }
+          changed = true;
+          return {
+            ...feature,
+            properties: {
+              ...feature.properties,
+              a_class: modelA.class_name,
+              a_prob: modelA.core_probability
+            }
+          };
+        });
+        return changed ? { ...previous, features } : previous;
+      });
+    }
+
+    return detail;
+  }, []);
 
   // 4. Load Detailed Site Intelligence when a site is selected
   useEffect(() => {
@@ -246,20 +323,18 @@ export default function App() {
     }
 
     const cutoff = mode === 'REPLAY' ? replayDate : undefined;
-    fetchSiteDetail(selectedSiteId, cutoff)
-      .then((detail) => {
-        if (active) {
-          setSelectedSite(detail);
-        }
-      })
-      .catch((err) => {
-        console.error(`Failed to fetch site ${selectedSiteId}:`, err);
+    queueMicrotask(() => {
+      if (!active) return;
+      refreshSelectedSite(selectedSiteId, cutoff).catch((err) => {
+        if (active) console.error(`Failed to fetch site ${selectedSiteId}:`, err);
       });
+    });
 
     return () => {
       active = false;
+      selectedSiteRequestId.current += 1;
     };
-  }, [selectedSiteId, mode, replayDate]);
+  }, [selectedSiteId, mode, replayDate, refreshSelectedSite]);
 
   // Jump to site action from alert feed
   const handleJumpToSite = (siteId: string, lat?: number, lon?: number) => {
@@ -274,11 +349,12 @@ export default function App() {
   };
 
   return (
-    <div className="flex flex-col w-screen h-screen overflow-hidden bg-[#070a12] text-slate-100 select-none">
+    <div className="app-shell flex flex-col w-screen h-screen overflow-hidden text-slate-100 select-none">
       {/* Top Telemetry Header */}
       <Header
-        stats={mode === 'LIVE' ? stats : null}
+        stats={stats}
         health={health}
+        liveAvailable={liveAvailable}
         mode={mode}
         onModeChange={(m) => {
           setMode(m);
@@ -291,7 +367,7 @@ export default function App() {
       />
 
       {/* Main Workspace Cockpit */}
-      <div className="flex flex-1 w-full h-[calc(100vh-3.5rem)] overflow-hidden relative">
+      <div className="command-workspace flex flex-1 w-full overflow-hidden relative">
         {/* Left Layer & Filter Rail */}
         <SidebarFilters
           filters={filters}
@@ -303,8 +379,8 @@ export default function App() {
         />
 
         {/* Center Interactive Map Viewport */}
-        <div className="flex-1 h-full relative">
-          <ErrorBoundary fallbackTitle="Tactical Map Rendering Error">
+        <div className="map-workspace flex-1 h-full relative min-w-0">
+          <ErrorBoundary fallbackTitle="Map rendering error">
             <MapContainer
               sitesData={sitesData}
               selectedSiteId={selectedSiteId}
@@ -344,6 +420,7 @@ export default function App() {
           <SiteDrawer
             site={selectedSite?.site_id === selectedSiteId ? selectedSite : null}
             asOfDate={mode === 'REPLAY' ? replayDate : undefined}
+            onRefreshSite={refreshSelectedSite}
             onClose={() => setSelectedSiteId(null)}
           />
         )}

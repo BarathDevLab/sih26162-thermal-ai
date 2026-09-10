@@ -7,7 +7,7 @@ import logging
 import os
 from datetime import date
 from typing import Optional, List
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 from sqlalchemy import func, select, or_, text
 from sqlalchemy.orm import aliased
@@ -86,13 +86,13 @@ def get_sites(
                 SiteModelC.c_score.label("c_score"),
                 active_alert.alert_level.label("alert_severity"),
                 active_alert.alert_type.label("alert_type"),
-                func.count(SourceSite.site_id).over().label("matched_count"),
             )
             .outerjoin(SiteModelA, SourceSite.site_id == SiteModelA.site_id)
             .outerjoin(SiteModelB, SourceSite.site_id == SiteModelB.site_id)
             .outerjoin(SiteModelC, SourceSite.site_id == SiteModelC.site_id)
             .outerjoin(active_alert, active_alert.alert_id == latest_active_alert_id)
         )
+        count_query = db.query(func.count(SourceSite.site_id))
 
         # 1. Bounding Box Filter
         if bbox:
@@ -117,6 +117,18 @@ def get_sites(
                         max_lon=max_lon,
                         max_lat=max_lat,
                     )
+                    count_query = count_query.filter(
+                        text(
+                            "source_sites.geometry && "
+                            "ST_MakeEnvelope(:count_min_lon, :count_min_lat, "
+                            ":count_max_lon, :count_max_lat, 4326)"
+                        )
+                    ).params(
+                        count_min_lon=min_lon,
+                        count_min_lat=min_lat,
+                        count_max_lon=max_lon,
+                        count_max_lat=max_lat,
+                    )
                 else:
                     query = query.filter(
                         SourceSite.longitude >= min_lon,
@@ -124,27 +136,60 @@ def get_sites(
                         SourceSite.latitude >= min_lat,
                         SourceSite.latitude <= max_lat
                     )
+                    count_query = count_query.filter(
+                        SourceSite.longitude >= min_lon,
+                        SourceSite.longitude <= max_lon,
+                        SourceSite.latitude >= min_lat,
+                        SourceSite.latitude <= max_lat,
+                    )
             except Exception as e:
                 raise HTTPException(status_code=400, detail=f"Invalid bbox parameter: {e}")
 
         # 2. Filter by Model A Identity
         if a_class:
             query = query.filter(SiteModelA.class_name == a_class.upper())
+            count_query = count_query.join(
+                SiteModelA, SourceSite.site_id == SiteModelA.site_id
+            ).filter(SiteModelA.class_name == a_class.upper())
 
         # 3. Filter by Model B Temporal State
         if b_state:
             query = query.filter(SiteModelB.state == b_state.upper())
+            count_query = count_query.join(
+                SiteModelB, SourceSite.site_id == SiteModelB.site_id
+            ).filter(SiteModelB.state == b_state.upper())
 
         # 4. Filter by Model C Anomaly Status
         if c_status:
             query = query.filter(SiteModelC.operational_status == c_status.upper())
+            count_query = count_query.join(
+                SiteModelC, SourceSite.site_id == SiteModelC.site_id
+            ).filter(SiteModelC.operational_status == c_status.upper())
 
         # 5. Filter by Alert Severity
         if alert_severity:
             query = query.filter(active_alert.alert_level == alert_severity.upper())
+            count_alert = aliased(Alert)
+            count_latest_alert_id = (
+                select(Alert.alert_id)
+                .where(Alert.site_id == SourceSite.site_id, Alert.status == "ACTIVE")
+                .order_by(Alert.updated_at.desc(), Alert.alert_id.desc())
+                .limit(1)
+                .correlate(SourceSite)
+                .scalar_subquery()
+            )
+            count_query = count_query.join(
+                count_alert, count_alert.alert_id == count_latest_alert_id
+            ).filter(count_alert.alert_level == alert_severity.upper())
+
+        # Count separately so the capped payload query can use a top-N plan. A
+        # COUNT(*) window forced PostgreSQL to materialize every matching viewport
+        # row before it could return even a small map payload.
+        total_count = int(
+            count_query.scalar() or 0
+        )
 
         # Prioritize actionable/recent sites and keep the capped result stable.
-        # The window count preserves the real number of matches in one query.
         rows = (
             query.order_by(
                 active_alert.updated_at.desc().nullslast(),
@@ -155,7 +200,6 @@ def get_sites(
             .limit(limit)
             .all()
         )
-        total_count = int(rows[0].matched_count) if rows else 0
 
         features: List[SiteGeoJSONFeature] = []
         for r in rows:
@@ -178,11 +222,19 @@ def get_sites(
                 )
             )
 
-        return SiteGeoJSONFeatureCollection(
+        response = SiteGeoJSONFeatureCollection(
             features=features,
             total_count=total_count,
             returned_count=len(features),
             truncated=total_count > len(features),
+        )
+        # The collection is already validated while it is constructed above.
+        # Returning Pydantic's native JSON avoids FastAPI recursively encoding and
+        # validating thousands of nested feature models a second time.
+        return Response(
+            content=response.model_dump_json(),
+            media_type="application/json",
+            headers={"Cache-Control": "private, max-age=15"},
         )
     except HTTPException:
         raise

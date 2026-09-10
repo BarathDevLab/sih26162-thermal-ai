@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import re
 import hashlib
+import shutil
+import tempfile
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -136,22 +138,21 @@ class HLSService:
         if not candidates:
             raise HLSUnavailable("No HLS v2.0 granule intersects the site/date search window.")
 
-        best_patch = None
+        # CMR order is not a reliable best-scene order. Prefer acquisitions nearest
+        # the target day, then use granule-level cloud metadata when it is present.
+        candidates.sort(key=lambda item: _candidate_sort_key(item[1], target_date))
         failures: List[str] = []
         for product, granule in candidates:
             try:
                 patch = self._download_and_extract(
                     earthaccess, granule, product, site_id, latitude, longitude, target_date
                 )
-                if best_patch is None or patch.cloud_fraction < best_patch.cloud_fraction:
-                    best_patch = patch
+                patch.validate()
+                self._write_cache(patch, lookup_date=target_date)
+                return patch
             except (HLSUnavailable, ValueError) as exc:
                 failures.append(str(exc))
-        if best_patch is None:
-            raise HLSUnavailable("No usable genuine HLS scene: " + "; ".join(failures[:3]))
-        best_patch.validate()
-        self._write_cache(best_patch, lookup_date=target_date)
-        return best_patch
+        raise HLSUnavailable("No usable genuine HLS scene: " + "; ".join(failures[:3]))
 
     def _download_and_extract(
         self,
@@ -183,45 +184,79 @@ class HLSService:
         granule_key = hashlib.sha256(
             selected[HLS_CHANNELS[product][0]].encode("utf-8")
         ).hexdigest()[:16]
-        download_dir = self.cache_dir / "_earthdata" / site_id / granule_key
-        download_dir.mkdir(parents=True, exist_ok=True)
-        downloaded = earthaccess.download(
-            list(selected.values()), local_path=download_dir, threads=4, show_progress=False
-        )
-        path_by_band = {}
-        for band in selected:
-            match = next(
-                (Path(path) for path in downloaded if re.search(
-                    rf"\.{re.escape(band)}\.tif$", Path(path).name, re.IGNORECASE
-                )),
-                None,
+        download_root = self.cache_dir / "_earthdata" / _safe_cache_component(site_id)
+        download_root.mkdir(parents=True, exist_ok=True)
+        work_dir = Path(tempfile.mkdtemp(prefix=f"{granule_key}-", dir=download_root))
+        try:
+            # Fmask is roughly 1-2 MiB while the six reflectance assets are around
+            # 150 MiB together. Reject cloud-covered or neighbouring tiles before
+            # transferring their large spectral bands.
+            fmask_path = self._download_asset(
+                earthaccess, selected["Fmask"], "Fmask", work_dir
             )
-            if match is None or not match.is_file():
-                raise HLSUnavailable(f"Earthdata download did not produce {band} asset.")
-            path_by_band[band] = match
+            fmask = self._read_centered_band(
+                fmask_path, latitude, longitude, reflectance=False
+            )
+            invalid = fmask == 255
+            cloudy = ((fmask.astype(np.uint8) & np.uint8(0b00011111)) != 0) | invalid
+            cloud_fraction = float(np.mean(cloudy))
+            max_cloud = float(os.environ.get("HLS_MAX_CLOUD_FRACTION", "0.25"))
+            if cloud_fraction > max_cloud:
+                raise HLSCloudRejected(
+                    f"HLS patch cloud/invalid fraction {cloud_fraction:.3f} exceeds {max_cloud:.3f}."
+                )
 
-        arrays = [
-            self._read_centered_band(path_by_band[band], latitude, longitude, reflectance=True)
-            for band in HLS_CHANNELS[product]
-        ]
-        fmask = self._read_centered_band(
-            path_by_band["Fmask"], latitude, longitude, reflectance=False
+            band_urls = [selected[band] for band in HLS_CHANNELS[product]]
+            downloaded = earthaccess.download(
+                band_urls, local_path=work_dir, threads=min(4, len(band_urls)), show_progress=False
+            )
+            path_by_band = {
+                band: self._find_downloaded_asset(downloaded, band)
+                for band in HLS_CHANNELS[product]
+            }
+            arrays = [
+                self._read_centered_band(
+                    path_by_band[band], latitude, longitude, reflectance=True
+                )
+                for band in HLS_CHANNELS[product]
+            ]
+            bands = np.stack(arrays).astype(np.float32)
+            cloudy |= ~np.isfinite(bands).all(axis=0)
+            cloud_fraction = float(np.mean(cloudy))
+            bands[:, cloudy] = 0.0
+            acquisition_date = _date_from_hls_name(fmask_path.name) or target_date
+            return HLSPatch(
+                site_id=site_id,
+                acquisition_date=acquisition_date,
+                product=product,
+                bands=bands,
+                cloud_fraction=cloud_fraction,
+                source_uri=selected[HLS_CHANNELS[product][0]],
+            )
+        finally:
+            # Only the compact 6x224x224 NPZ is a runtime cache artifact. Complete
+            # HLS tiles and partial Earthdata downloads are disposable staging data.
+            shutil.rmtree(work_dir, ignore_errors=True)
+
+    def _download_asset(self, earthaccess, url: str, band: str, work_dir: Path) -> Path:
+        downloaded = earthaccess.download(
+            [url], local_path=work_dir, threads=1, show_progress=False
         )
-        invalid = fmask == 255
-        cloudy = ((fmask.astype(np.uint8) & np.uint8(0b00011111)) != 0) | invalid
-        bands = np.stack(arrays).astype(np.float32)
-        cloudy |= ~np.isfinite(bands).all(axis=0)
-        cloud_fraction = float(np.mean(cloudy))
-        bands[:, cloudy] = 0.0
-        acquisition_date = _date_from_hls_name(path_by_band["Fmask"].name) or target_date
-        return HLSPatch(
-            site_id=site_id,
-            acquisition_date=acquisition_date,
-            product=product,
-            bands=bands,
-            cloud_fraction=cloud_fraction,
-            source_uri=selected[HLS_CHANNELS[product][0]],
+        return self._find_downloaded_asset(downloaded, band)
+
+    @staticmethod
+    def _find_downloaded_asset(downloaded, band: str) -> Path:
+        match = next(
+            (
+                Path(path)
+                for path in downloaded
+                if re.search(rf"\.{re.escape(band)}\.tif$", Path(path).name, re.IGNORECASE)
+            ),
+            None,
         )
+        if match is None or not match.is_file():
+            raise HLSUnavailable(f"Earthdata download did not produce {band} asset.")
+        return match
 
     @staticmethod
     def _read_centered_band(
@@ -300,3 +335,38 @@ def _date_from_hls_name(name: str) -> Optional[date]:
     if not match:
         return None
     return datetime.strptime("".join(match.groups()), "%Y%j").date()
+
+
+def _candidate_sort_key(granule, target_date: date) -> tuple[int, float]:
+    """Rank HLS granules without depending on a particular earthaccess result class."""
+
+    acquisition = None
+    try:
+        acquisition = next(
+            (
+                _date_from_hls_name(link)
+                for link in granule.data_links()
+                if _date_from_hls_name(link) is not None
+            ),
+            None,
+        )
+    except Exception:
+        acquisition = None
+
+    cloud_cover = 101.0
+    try:
+        umm = granule.get("umm", {})
+        value = umm.get("CloudCover") if isinstance(umm, dict) else None
+        if value is not None:
+            cloud_cover = float(value)
+    except (AttributeError, TypeError, ValueError):
+        pass
+    date_distance = abs((acquisition - target_date).days) if acquisition else 10_000
+    return date_distance, cloud_cover
+
+
+def _safe_cache_component(value: str) -> str:
+    """Keep staging paths below the HLS cache even for unexpected site identifiers."""
+
+    component = re.sub(r"[^A-Za-z0-9_.-]", "_", value).strip(".")
+    return component or "unknown-site"

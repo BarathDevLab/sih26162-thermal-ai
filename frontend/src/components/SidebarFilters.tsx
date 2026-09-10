@@ -66,14 +66,14 @@ export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
   };
 
   return (
-    <aside className="w-80 bg-[#070a12]/95 border-r border-white/10 flex flex-col h-full select-none z-20 shrink-0 text-xs overflow-y-auto backdrop-blur tactical-glass">
+    <aside className="command-sidebar w-80 flex flex-col h-full select-none z-20 shrink-0 text-xs overflow-y-auto">
       {/* Panel Header */}
       <div className="p-3.5 border-b border-white/10 flex items-center justify-between bg-[#090e1a]">
         <div className="flex items-center gap-2.5 font-bold text-slate-100 tracking-wider">
           <div className="w-6 h-6 rounded bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center">
             <SlidersHorizontal className="w-3.5 h-3.5 text-cyan-400" />
           </div>
-          <span className="font-mono text-[11px] uppercase tracking-wider">LAYER MATRIX</span>
+          <span className="font-mono text-[11px] uppercase tracking-wider">INTELLIGENCE LAYERS</span>
         </div>
         <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-900/90 border border-white/10">
           <ResolverIcon className="w-3 h-3 text-cyan-400" />
@@ -92,7 +92,7 @@ export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
 
       <div className="p-3 space-y-3">
         {/* 1. Model A: Source Identity */}
-        <div className="rounded-lg bg-[#0b1120]/80 border border-white/10 overflow-hidden">
+        <div className="filter-module rounded-lg bg-[#0b1120]/80 border border-white/10 overflow-hidden">
           <button
             onClick={() => toggleSection('modelA')}
             className="w-full px-3 py-2 bg-[#0d1424] hover:bg-[#111c33] border-b border-white/5 flex items-center justify-between text-left transition-colors"
@@ -133,7 +133,7 @@ export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
                       INDUSTRIAL
                     </div>
                     <div className="text-[9.5px] text-slate-400 font-mono">
-                      Persistent combustion emitter
+                      Industrial source classification
                     </div>
                   </div>
                 </div>
@@ -165,7 +165,7 @@ export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
                       NON-INDUSTRIAL
                     </div>
                     <div className="text-[9.5px] text-slate-400 font-mono">
-                      Wildfire, stubble, biomass
+                      Non-industrial source classification
                     </div>
                   </div>
                 </div>
@@ -240,7 +240,7 @@ export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
         </div>
 
         {/* 2. Model B: Temporal State */}
-        <div className="rounded-lg bg-[#0b1120]/80 border border-white/10 overflow-hidden">
+        <div className="filter-module rounded-lg bg-[#0b1120]/80 border border-white/10 overflow-hidden">
           <button
             onClick={() => toggleSection('modelB')}
             className="w-full px-3 py-2 bg-[#0d1424] hover:bg-[#111c33] border-b border-white/5 flex items-center justify-between text-left transition-colors"
@@ -297,7 +297,7 @@ export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
         </div>
 
         {/* 3. Model C: Anomaly Severity Status */}
-        <div className="rounded-lg bg-[#0b1120]/80 border border-white/10 overflow-hidden">
+        <div className="filter-module rounded-lg bg-[#0b1120]/80 border border-white/10 overflow-hidden">
           <button
             onClick={() => toggleSection('modelC')}
             className="w-full px-3 py-2 bg-[#0d1424] hover:bg-[#111c33] border-b border-white/5 flex items-center justify-between text-left transition-colors"
@@ -365,7 +365,7 @@ export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
         </div>
 
         {/* 4. 3D Geospatial & Terrain Controls */}
-        <div className="rounded-lg bg-[#0b1120]/80 border border-white/10 overflow-hidden">
+        <div className="filter-module rounded-lg bg-[#0b1120]/80 border border-white/10 overflow-hidden">
           <button
             onClick={() => toggleSection('elevation3D')}
             className="w-full px-3 py-2 bg-[#0d1424] hover:bg-[#111c33] border-b border-white/5 flex items-center justify-between text-left transition-colors"
@@ -403,7 +403,7 @@ export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
                 <div className="flex justify-between text-[8.5px] font-mono text-slate-500 mt-1">
                   <span>1.0x (Flat)</span>
                   <span>3.0x</span>
-                  <span>5.0x (Mega Spikes)</span>
+                  <span>5.0x (Maximum)</span>
                 </div>
               </div>
 
@@ -436,7 +436,7 @@ export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
         </div>
 
         {/* 5. Corroborating Ground-Truth Registries */}
-        <div className="rounded-lg bg-[#0b1120]/80 border border-white/10 overflow-hidden">
+        <div className="filter-module rounded-lg bg-[#0b1120]/80 border border-white/10 overflow-hidden">
           <button
             onClick={() => toggleSection('evidence')}
             className="w-full px-3 py-2 bg-[#0d1424] hover:bg-[#111c33] border-b border-white/5 flex items-center justify-between text-left transition-colors"
@@ -473,7 +473,7 @@ export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
                   </div>
                 </div>
                 <span className="text-[9.5px] font-mono px-1.5 py-0.2 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30">
-                  962 units
+                  REGISTRY
                 </span>
               </div>
 
@@ -498,7 +498,7 @@ export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
                   </div>
                 </div>
                 <span className="text-[9.5px] font-mono px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                  174 flares
+                  REGISTRY
                 </span>
               </div>
 
@@ -523,7 +523,7 @@ export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
                   </div>
                 </div>
                 <span className="text-[9.5px] font-mono px-1.5 py-0.2 rounded bg-orange-500/20 text-orange-300 border border-orange-500/30">
-                  5,158 pts
+                  REGISTRY
                 </span>
               </div>
 
