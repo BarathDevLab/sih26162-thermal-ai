@@ -11,18 +11,7 @@ _ROOT = Path(__file__).resolve().parents[3]
 FEATURE_CONFIG_PATH = _ROOT / "backend" / "config" / "model_a_features.json"
 THRESHOLD_CONFIG_PATH = _ROOT / "backend" / "config" / "frozen_thresholds.json"
 
-# --- Patch for scikit-learn 1.6+ and xgboost 2.1.3 compatibility ---
-try:
-    import xgboost.sklearn
-    def _patched_tags(self):
-        from sklearn.base import BaseEstimator, ClassifierMixin
-        class Dummy(ClassifierMixin, BaseEstimator): pass
-        return Dummy().__sklearn_tags__()
-    xgboost.sklearn.XGBClassifier.__sklearn_tags__ = _patched_tags
-    xgboost.sklearn.XGBModel.__sklearn_tags__ = _patched_tags
-except ImportError:
-    pass
-# -------------------------------------------------------------------
+
 
 class ModelAEngine:
     def __init__(self, model_path: str = MODEL_PATH_DEFAULT):
