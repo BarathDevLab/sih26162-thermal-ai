@@ -489,7 +489,10 @@ Compress-Archive `
 ```
 
 Database dumps are large runtime artifacts and should be distributed outside ordinary Git history. Recipients restore them with `backend/scripts/restore_runtime_database.ps1` as described above.
-
+.\.venv\Scripts\python.exe  .\backend\scripts\backfill_firms_2026.py `                                                                
+>>   --start-date 2026-01-01 `                                          
+>>   --end-date 2026-09-11 `
+>>   --update-db
 ## Docker Compose (optional)
 
 Docker Compose starts PostGIS, the FastAPI container, and the production frontend:
