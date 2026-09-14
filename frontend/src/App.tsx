@@ -123,11 +123,18 @@ export default function App() {
   const [sitesError, setSitesError] = useState<string | null>(null);
   const [bootstrapSettled, setBootstrapSettled] = useState<boolean>(false);
   const [telemetryReady, setTelemetryReady] = useState<boolean>(false);
+  const [startupAttempt, setStartupAttempt] = useState<number>(0);
+  const [startupConnectionDetail, setStartupConnectionDetail] = useState<string>(
+    'Waiting for the local backend to accept operational traffic.'
+  );
+  const [startupRetryDelayMs, setStartupRetryDelayMs] = useState<number | null>(null);
   const [liveRuntime, setLiveRuntime] = useState<LiveRuntimeStatus | null>(null);
   const [mapReady, setMapReady] = useState<boolean>(false);
   const [initialSitesRendered, setInitialSitesRendered] = useState<boolean>(false);
+  const [interfaceActivated, setInterfaceActivated] = useState<boolean>(false);
   const sitesRequestId = useRef(0);
   const sitesAbortController = useRef<AbortController | null>(null);
+  const initialSiteRetryAttempt = useRef(0);
   const sitesCache = useRef<Map<string, ViewportCacheEntry>>(new Map());
   const [selectedSiteId, setSelectedSiteId] = useState<string | null>(null);
   const [selectedSite, setSelectedSite] = useState<SiteDetail | null>(null);
@@ -150,35 +157,71 @@ export default function App() {
     return counts;
   }, [sitesData]);
 
-  // 1. Initial Health, Stats, and Alerts Load
+  // 1. Initial runtime handshake. Uvicorn may still be completing its lifespan
+  // startup while Vite is already serving the shell, so a proxy 502 is a
+  // transient "not ready" signal rather than a completed bootstrap.
   useEffect(() => {
+    let active = true;
+    let retryTimer: number | null = null;
+    let attempt = 0;
+
     const initTelemetry = async () => {
+      attempt += 1;
+      if (!active) return;
+      setStartupAttempt(attempt);
+      setStartupRetryDelayMs(null);
+      setStartupConnectionDetail(
+        attempt === 1
+          ? 'Contacting the local backend and waiting for application startup.'
+          : `Re-establishing the local backend link (attempt ${attempt}).`
+      );
+
       try {
-        const [h, s, a, runtime] = await Promise.all([
-          fetchHealth(),
+        // While Uvicorn is still offline, probe only the lightweight health
+        // endpoint. The remaining API calls start after the socket is live so
+        // one retry produces one expected proxy refusal instead of four.
+        const h = await fetchHealth();
+        if (!active) return;
+        setStartupConnectionDetail('Backend socket established. Loading runtime telemetry.');
+        const [s, a, runtime] = await Promise.all([
           fetchStats(),
           fetchAlerts(),
           fetchLiveStatus()
         ]);
+        if (!active) return;
         setHealth(h);
         setStats(s);
         setAlerts(a.alerts);
         setLiveRuntime(runtime);
         setTelemetryReady(true);
+        setBootstrapSettled(true);
+        setSitesError(null);
+        setStartupConnectionDetail('Backend runtime established. Loading the operational picture.');
         const liveReady = h.status === 'READY' || h.status === 'DEGRADED_PRITHVI_UNAVAILABLE';
         setMode(liveReady ? 'LIVE' : 'REPLAY');
         if (!liveReady && s.latest_firms_date) {
           setReplayDate(s.latest_firms_date);
         }
       } catch (err) {
+        if (!active) return;
         setTelemetryReady(false);
-        console.error('Telemetry bootstrap failed:', err);
-      } finally {
-        setBootstrapSettled(true);
+        setBootstrapSettled(false);
+        const retryDelay = Math.min(5_000, 500 * (2 ** Math.min(attempt - 1, 4)));
+        setStartupRetryDelayMs(retryDelay);
+        setStartupConnectionDetail(
+          `Backend startup has not completed (attempt ${attempt}). Retrying in ${(retryDelay / 1_000).toFixed(1)}s.`
+        );
+        console.info('Backend runtime is not ready; bootstrap will retry:', err);
+        retryTimer = window.setTimeout(() => void initTelemetry(), retryDelay);
       }
     };
 
-    initTelemetry();
+    void initTelemetry();
+
+    return () => {
+      active = false;
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
+    };
   }, []);
 
   // A stale backend catches up in the background. Poll readiness so the UI
@@ -245,7 +288,7 @@ export default function App() {
 
   // 3. Load Sites based on BBox and Operating Mode
   const loadSites = useCallback(async () => {
-    if (!currentBBox) return;
+    if (!currentBBox || !telemetryReady || !bootstrapSettled) return;
 
     const requestId = ++sitesRequestId.current;
     const limit = viewportLimit(currentBBox);
@@ -315,12 +358,14 @@ export default function App() {
           cachedFeatureCount -= sitesCache.current.get(oldestKey)?.data.features.length ?? 0;
           sitesCache.current.delete(oldestKey);
         }
+        initialSiteRetryAttempt.current = 0;
         setSitesData(data);
       }
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
       console.error('Error fetching sites:', err);
       if (requestId === sitesRequestId.current && !cachedMatch) {
+        if (!initialSitesRendered) initialSiteRetryAttempt.current += 1;
         setSitesError(err instanceof Error ? err.message : 'Unable to load sites');
       }
     } finally {
@@ -331,16 +376,35 @@ export default function App() {
         }
       }
     }
-  }, [currentBBox, mode, replayDate]);
+  }, [bootstrapSettled, currentBBox, initialSitesRendered, mode, replayDate, telemetryReady]);
 
   useEffect(() => {
-    if (!currentBBox) return;
+    if (!currentBBox || !telemetryReady || !bootstrapSettled) return;
     const task = window.setTimeout(() => void loadSites(), VIEWPORT_REQUEST_DEBOUNCE_MS);
     return () => {
       window.clearTimeout(task);
       sitesAbortController.current?.abort();
     };
-  }, [currentBBox, loadSites]);
+  }, [bootstrapSettled, currentBBox, loadSites, telemetryReady]);
+
+  // The first viewport is part of startup. Keep retrying it behind the mission
+  // screen instead of revealing a half-initialized interface after one error.
+  useEffect(() => {
+    if (
+      !currentBBox
+      || !telemetryReady
+      || !bootstrapSettled
+      || initialSitesRendered
+      || !sitesError
+    ) return;
+
+    const retryDelay = Math.min(
+      5_000,
+      750 * (2 ** Math.min(initialSiteRetryAttempt.current - 1, 3))
+    );
+    const task = window.setTimeout(() => void loadSites(), retryDelay);
+    return () => window.clearTimeout(task);
+  }, [bootstrapSettled, currentBBox, initialSitesRendered, loadSites, sitesError, telemetryReady]);
 
   const refreshSelectedSite = useCallback(async (siteId: string, asOfDate?: string) => {
     const requestId = ++selectedSiteRequestId.current;
@@ -386,8 +450,30 @@ export default function App() {
     setAlerts(prev => prev.filter(a => a.alert_id !== alertId));
   };
 
+  const startupCatchupBlocking = Boolean(liveRuntime?.startup_catchup.running) || Boolean(
+    health?.status === 'STALE_BACKFILL'
+    && liveRuntime?.startup_catchup.status === 'COMPLETED'
+  );
+  const startupPrerequisitesReady = telemetryReady
+    && bootstrapSettled
+    && mapReady
+    && initialSitesRendered
+    && !sitesError
+    && !startupCatchupBlocking;
+
+  // Startup is a one-way handoff. Once activated, ordinary runtime errors are
+  // handled inside the command center and never resurrect the boot overlay.
+  useEffect(() => {
+    if (interfaceActivated || !startupPrerequisitesReady) return;
+    const confirmation = window.setTimeout(() => setInterfaceActivated(true), 350);
+    return () => window.clearTimeout(confirmation);
+  }, [interfaceActivated, startupPrerequisitesReady]);
+
   return (
-    <div className="relative w-screen h-screen overflow-hidden bg-[#02040a] text-slate-100 select-none font-sans">
+    <div
+      className={`command-center-root relative w-screen h-screen overflow-hidden bg-[#02040a] text-slate-100 select-none font-sans ${interfaceActivated ? 'is-activated' : 'is-booting'}`}
+      aria-busy={!interfaceActivated}
+    >
       {/* Full-bleed map canvas covers the entire screen */}
       <div className="absolute inset-0">
         <ErrorBoundary fallbackTitle="Tactical Map Rendering Error">
@@ -585,6 +671,7 @@ export default function App() {
       {selectedSiteId && (
         <div className="absolute top-14 right-4 bottom-4 z-30 flex flex-col justify-start pointer-events-auto">
           <SiteDrawer
+            key={selectedSiteId}
             site={selectedSite?.site_id === selectedSiteId ? selectedSite : null}
             asOfDate={mode === 'REPLAY' ? replayDate : undefined}
             onRefreshSite={refreshSelectedSite}
@@ -594,21 +681,15 @@ export default function App() {
       )}
 
       <SystemLoadingScreen
-        visible={
-          !mapReady
-          || !bootstrapSettled
-          || (!initialSitesRendered && !sitesError)
-          || Boolean(liveRuntime?.startup_catchup.running)
-          || Boolean(
-            health?.status === 'STALE_BACKFILL'
-            && liveRuntime?.startup_catchup.status === 'COMPLETED'
-          )
-        }
+        visible={!interfaceActivated}
         mapReady={mapReady}
         backendReady={telemetryReady}
         sitesReady={initialSitesRendered}
-        error={sitesError}
+        error={telemetryReady ? sitesError : null}
         catchup={liveRuntime?.startup_catchup ?? null}
+        connectionAttempt={startupAttempt}
+        connectionDetail={startupConnectionDetail}
+        retryDelayMs={startupRetryDelayMs}
       />
     </div>
   );

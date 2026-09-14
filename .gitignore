@@ -48,6 +48,7 @@ data/database_snapshots/
 data/database_snapshots*.zip
 data/hls_cache/
 data/runtime_logs/
+data/exports/
 *.pt
 *.pth
 *.onnx

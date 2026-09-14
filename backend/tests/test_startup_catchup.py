@@ -53,3 +53,4 @@ def test_startup_catchup_exposes_mission_progress(monkeypatch):
     assert status["progress_percent"] == 42
     assert status["completed_windows"] == 4
     assert status["total_windows"] == 9
+    assert status["updated_at"] is not None

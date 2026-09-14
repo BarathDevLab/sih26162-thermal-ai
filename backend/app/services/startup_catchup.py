@@ -23,6 +23,7 @@ _status: Dict[str, Any] = {
     "running": False,
     "phase": "IDLE",
     "progress_percent": 0,
+    "phase_progress_percent": 0,
     "source_date": None,
     "target_date": None,
     "completed_windows": 0,
@@ -30,10 +31,22 @@ _status: Dict[str, Any] = {
     "current_window_start": None,
     "current_window_end": None,
     "records_processed": 0,
+    "records_fetched": 0,
+    "records_unique": 0,
+    "records_revised": 0,
+    "promoted_sites": 0,
+    "alerts_generated": 0,
+    "current_source": None,
+    "model_b_processed_sites": 0,
+    "model_b_total_sites": 0,
+    "worldcover_processed_sites": 0,
+    "worldcover_total_sites": 0,
+    "worldcover_current_tile": None,
     "processed_sites": 0,
     "total_sites": 0,
     "started_at": None,
     "ended_at": None,
+    "updated_at": None,
     "detail": "No startup catch-up has been requested.",
 }
 
@@ -65,6 +78,7 @@ async def _catch_up_and_activate(app) -> None:
         "running": True,
         "phase": "ACQUIRING_LOCK",
         "progress_percent": 1,
+        "phase_progress_percent": 0,
         "source_date": "2026-01-01",
         "target_date": target.isoformat(),
         "completed_windows": 0,
@@ -72,10 +86,22 @@ async def _catch_up_and_activate(app) -> None:
         "current_window_start": None,
         "current_window_end": None,
         "records_processed": 0,
+        "records_fetched": 0,
+        "records_unique": 0,
+        "records_revised": 0,
+        "promoted_sites": 0,
+        "alerts_generated": 0,
+        "current_source": None,
+        "model_b_processed_sites": 0,
+        "model_b_total_sites": 0,
+        "worldcover_processed_sites": 0,
+        "worldcover_total_sites": 0,
+        "worldcover_current_tile": None,
         "processed_sites": 0,
         "total_sites": 0,
         "started_at": datetime.now(timezone.utc).isoformat(),
         "ended_at": None,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
         "detail": "Catching up FIRMS and publishing the current A/B/C snapshot.",
     })
     logger.info(
@@ -91,7 +117,9 @@ async def _catch_up_and_activate(app) -> None:
                 "status": "SKIPPED_ALREADY_RUNNING",
                 "running": False,
                 "phase": "LOCKED_BY_PEER",
+                "phase_progress_percent": 0,
                 "ended_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
                 "detail": "Another backend process owns the database catch-up lock.",
             })
             return
@@ -111,7 +139,9 @@ async def _catch_up_and_activate(app) -> None:
                 "running": False,
                 "phase": "LIVE_ACTIVATED",
                 "progress_percent": 100,
+                "phase_progress_percent": 100,
                 "ended_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
                 "detail": (
                     f"Catch-up published {result.get('snapshot_status')} through {target}; "
                     "live scheduler started."
@@ -123,7 +153,9 @@ async def _catch_up_and_activate(app) -> None:
                 "status": "COMPLETED_NOT_READY",
                 "running": False,
                 "phase": "READINESS_BLOCKED",
+                "phase_progress_percent": 100,
                 "ended_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
                 "detail": f"Catch-up completed but readiness is {readiness.status}: {readiness.detail}",
             })
             logger.warning(_status["detail"])
@@ -133,7 +165,9 @@ async def _catch_up_and_activate(app) -> None:
             "status": "FAILED",
             "running": False,
             "phase": "FAILED",
+            "phase_progress_percent": 0,
             "ended_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
             "detail": detail,
         })
         logger.error("Automatic startup catch-up failed: %s", detail)
@@ -141,7 +175,9 @@ async def _catch_up_and_activate(app) -> None:
 
 def _update_catchup_progress(payload: Dict[str, Any]) -> None:
     """Receive thread-safe primitive progress fields from the backfill worker."""
-    _status.update(payload)
+    next_payload = dict(payload)
+    next_payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+    _status.update(next_payload)
 
 
 def _run_locked_catchup(target: date, progress_callback=None) -> Dict[str, Any]:

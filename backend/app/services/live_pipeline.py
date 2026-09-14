@@ -7,7 +7,7 @@ import os
 import uuid
 from datetime import date, datetime, timezone
 from collections import defaultdict
-from typing import Any, DefaultDict, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, DefaultDict, Dict, List, Optional, Set, Tuple
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -535,11 +535,30 @@ class LivePipelineService:
         return 1
 
 
-def run_global_daily_model_b_refresh(db: Session, as_of_date: Optional[date] = None) -> Dict[str, Any]:
+def run_global_daily_model_b_refresh(
+    db: Session,
+    as_of_date: Optional[date] = None,
+    progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+) -> Dict[str, Any]:
     """Recompute every site with bulk I/O and the frozen deterministic engine."""
+    def report_progress(processed: int, total: int, percent: int, detail: str) -> None:
+        if progress_callback is not None:
+            progress_callback({
+                "processed_sites": processed,
+                "total_sites": total,
+                "progress_percent": max(0, min(100, percent)),
+                "detail": detail,
+            })
+
     service = get_live_pipeline_service()
     ref_date = as_of_date or date.today()
     site_ids = [row[0] for row in db.query(SourceSite.site_id).all()]
+    report_progress(
+        0,
+        len(site_ids),
+        0,
+        f"Loading temporal histories for {len(site_ids)} sites through {ref_date}.",
+    )
     history_count = (
         db.query(SiteModelBHistory.site_id)
         .filter(SiteModelBHistory.as_of_date == ref_date)
@@ -551,6 +570,12 @@ def run_global_daily_model_b_refresh(db: Session, as_of_date: Optional[date] = N
             "Daily Model B is already materialized for all %d sites through %s.",
             len(site_ids),
             ref_date,
+        )
+        report_progress(
+            len(site_ids),
+            len(site_ids),
+            100,
+            f"Model B was already current for all {len(site_ids)} sites.",
         )
         return {
             "status": "ALREADY_COMPLETED",
@@ -592,6 +617,12 @@ def run_global_daily_model_b_refresh(db: Session, as_of_date: Optional[date] = N
         .all()
     )
     logger.info("Model B histories loaded; starting batched deterministic evaluation.")
+    report_progress(
+        0,
+        len(site_ids),
+        10,
+        f"Temporal histories loaded; evaluating {len(site_ids)} deterministic site states.",
+    )
 
     batch_size = 5_000
     for offset in range(0, len(site_ids), batch_size):
@@ -642,6 +673,13 @@ def run_global_daily_model_b_refresh(db: Session, as_of_date: Optional[date] = N
             "Materialized daily Model B for %d/%d sites",
             min(offset + len(batch), len(site_ids)),
             len(site_ids),
+        )
+        processed = min(offset + len(batch), len(site_ids))
+        report_progress(
+            processed,
+            len(site_ids),
+            10 + round(90 * processed / max(1, len(site_ids))),
+            f"Materialized Model B for {processed}/{len(site_ids)} sites.",
         )
     return {
         "status": "COMPLETED",

@@ -137,10 +137,16 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Initial schema creation failed.' }
     }
 
-    Write-Host 'Applying the idempotent PostGIS runtime migration...'
-    & $psql --host=$Server --port=$Port --username=$Username --dbname=$Database `
-        --set=ON_ERROR_STOP=1 --file=backend/migrations/001_runtime_overhaul.sql
-    if ($LASTEXITCODE -ne 0) { throw 'Runtime migration failed. Confirm PostGIS is installed.' }
+    Write-Host 'Applying idempotent PostgreSQL/PostGIS runtime migrations...'
+    $migrationFiles = Get-ChildItem -LiteralPath 'backend/migrations' -Filter '*.sql' | Sort-Object Name
+    foreach ($migrationFile in $migrationFiles) {
+        Write-Host "Applying $($migrationFile.Name)..."
+        & $psql --host=$Server --port=$Port --username=$Username --dbname=$Database `
+            --set=ON_ERROR_STOP=1 --file=$migrationFile.FullName
+        if ($LASTEXITCODE -ne 0) {
+            throw "Runtime migration failed at $($migrationFile.Name). Confirm PostGIS is installed."
+        }
+    }
 
     if ($needsBootstrap) {
         Write-Host 'Loading the frozen authoritative 2025 bootstrap...'

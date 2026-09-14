@@ -23,7 +23,8 @@ from backend.app.db.models import (
     FacilityEvidence,
     ImageryCache,
     ModelVersion,
-    IngestionRun
+    IngestionRun,
+    SiteReview,
 )
 
 
@@ -57,7 +58,8 @@ def test_tables_created(db_session):
         "facility_evidence",
         "imagery_cache",
         "model_versions",
-        "ingestion_runs"
+        "ingestion_runs",
+        "site_reviews",
     ]
     for exp in expected:
         assert exp in table_names

@@ -51,6 +51,7 @@ class SourceSite(Base):
     model_b = relationship("SiteModelB", back_populates="source_site", uselist=False)
     model_c = relationship("SiteModelC", back_populates="source_site", uselist=False)
     alerts = relationship("Alert", back_populates="source_site")
+    reviews = relationship("SiteReview", back_populates="source_site")
 
     __table_args__ = (
         Index("idx_source_sites_coords", "latitude", "longitude"),
@@ -320,6 +321,44 @@ class Alert(Base):
     __table_args__ = (
         Index("idx_alerts_severity_updated", "alert_level", "updated_at"),
         Index("idx_alerts_site_status_updated", "site_id", "status", "updated_at", "alert_id"),
+    )
+
+
+class SiteReview(Base):
+    """Append-only analyst adjudication event for an unclassified source site."""
+    __tablename__ = "site_reviews"
+
+    review_id = Column(String(64), primary_key=True)
+    site_id = Column(String(64), ForeignKey("source_sites.site_id"), nullable=False, index=True)
+    alert_id = Column(String(64), ForeignKey("alerts.alert_id"), nullable=True, index=True)
+    supersedes_review_id = Column(String(64), ForeignKey("site_reviews.review_id"), nullable=True)
+    review_status = Column(String(32), nullable=False, index=True)
+    determination = Column(String(32), nullable=True, index=True)
+    confidence = Column(String(16), nullable=True)
+    consensus_status = Column(String(32), nullable=False, default="NOT_APPLICABLE", index=True)
+    reason_codes = Column(JSON, nullable=True)
+    notes = Column(Text, nullable=True)
+    evidence_refs = Column(JSON, nullable=True)
+    reviewed_by = Column(String(128), nullable=False, index=True)
+    reviewed_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), index=True)
+    country = Column(String(64), nullable=False, default="INDIA", index=True)
+    training_eligible = Column(Boolean, nullable=False, default=False, index=True)
+
+    # Snapshot the machine output at review time. Human review never mutates it.
+    model_a_class = Column(String(32), nullable=True)
+    model_a_probability = Column(Float, nullable=True)
+    model_a_decision = Column(String(64), nullable=True)
+    model_stack_version = Column(String(64), nullable=False)
+    feature_version = Column(String(64), nullable=True)
+    feature_snapshot = Column(JSON, nullable=True)
+
+    source_site = relationship("SourceSite", back_populates="reviews")
+    alert = relationship("Alert")
+    supersedes = relationship("SiteReview", remote_side=[review_id])
+
+    __table_args__ = (
+        Index("idx_site_reviews_site_time", "site_id", "reviewed_at", "review_id"),
+        Index("idx_site_reviews_training", "training_eligible", "determination", "country"),
     )
 
 

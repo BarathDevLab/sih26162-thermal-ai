@@ -657,6 +657,22 @@ input[type="range"].tactical-slider::-moz-range-thumb {
     radial-gradient(circle at 50% 105%, rgba(2, 165, 190, 0.08), transparent 38%),
     #02070c;
   isolation: isolate;
+  opacity: 1;
+  filter: blur(0);
+  transform: scale(1);
+  transform-origin: center;
+  transition:
+    opacity 760ms cubic-bezier(0.22, 1, 0.36, 1),
+    filter 900ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 900ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: opacity, filter, transform;
+}
+
+.system-loading-screen.is-exiting {
+  opacity: 0;
+  filter: blur(8px);
+  transform: scale(1.018);
+  pointer-events: none;
 }
 
 .system-loading-stars {
@@ -1013,44 +1029,91 @@ input[type="range"].tactical-slider::-moz-range-thumb {
   right: clamp(50px, 5vw, 76px);
   z-index: 10;
   display: grid;
-  gap: 6px;
-  width: min(184px, 18vw);
+  gap: 4px;
+  width: min(265px, 22vw);
   transform: translateY(-50%);
+}
+
+.mission-stage-rail h2 {
+  margin: 0 0 4px;
+  padding: 0 8px 7px;
+  color: #a8c2c8;
+  font-size: clamp(7px, 0.72vw, 10px);
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  border-bottom: 1px solid rgba(79, 157, 173, 0.28);
 }
 
 .mission-stage-rail > div {
   display: grid;
-  grid-template-columns: 18px 1fr;
+  grid-template-columns: 18px 15px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 3px;
-  padding: 7px 9px;
+  gap: 3px 5px;
+  padding: 5px 8px 6px;
   color: #526970;
   border-left: 1px solid rgba(95, 133, 142, 0.3);
-  background: linear-gradient(90deg, rgba(11, 27, 34, 0.72), transparent);
+  background: linear-gradient(90deg, rgba(7, 20, 27, 0.88), rgba(7, 20, 27, 0.3));
+  backdrop-filter: blur(5px);
 }
 
-.mission-stage-rail span,
-.mission-stage-rail b {
+.mission-stage-rail .mission-stage-name,
+.mission-stage-rail b,
+.mission-stage-rail em {
   overflow: hidden;
-  font-size: clamp(7px, 0.72vw, 9px);
+  font-size: clamp(6px, 0.66vw, 9px);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .mission-stage-rail b {
-  grid-column: 2;
+  grid-column: 4;
   font-weight: 500;
   letter-spacing: 0.12em;
+}
+
+.mission-stage-index {
+  grid-row: 1 / 3;
+  color: #354a50;
+  font-size: 7px;
+}
+
+.mission-stage-progress {
+  grid-column: 2 / 4;
+  height: 2px;
+  overflow: hidden;
+  background: rgba(100, 139, 148, 0.16);
+}
+
+.mission-stage-progress i {
+  display: block;
+  height: 100%;
+  background: #3e5b61;
+  transition: width 280ms ease;
+}
+
+.mission-stage-rail em {
+  grid-column: 4;
+  color: #40575d;
+  font-style: normal;
+  text-align: right;
 }
 
 .mission-stage-rail > div.is-active {
   color: #ff8b64;
   border-color: #ff754f;
+  box-shadow: inset 9px 0 18px -18px #ff754f;
 }
 
 .mission-stage-rail > div.is-active b {
   animation: system-loading-status-pulse 1.2s ease-in-out infinite;
 }
+
+.mission-stage-rail > div.is-active .mission-stage-progress i {
+  background: #ff754f;
+  box-shadow: 0 0 7px #ff6c44;
+}
+
+.mission-stage-rail > div.is-active em { color: #ff9473; }
 
 .mission-stage-rail > div.is-ready {
   color: #62dfeb;
@@ -1058,6 +1121,15 @@ input[type="range"].tactical-slider::-moz-range-thumb {
 }
 
 .mission-stage-rail > div.is-ready b { color: #65dbb4; }
+
+.mission-stage-rail > div.is-ready .mission-stage-index { color: #347d86; }
+
+.mission-stage-rail > div.is-ready .mission-stage-progress i {
+  background: #35d1df;
+  box-shadow: 0 0 6px #2ac9d8;
+}
+
+.mission-stage-rail > div.is-ready em { color: #5cbdc5; }
 
 .mission-loader-footer {
   position: absolute;
@@ -1151,6 +1223,28 @@ input[type="range"].tactical-slider::-moz-range-thumb {
   letter-spacing: 0.08em;
 }
 
+.mission-loader-live-metrics {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(9px, 1.4vw, 20px);
+  margin-top: 7px;
+  color: #526c73;
+  font-size: clamp(6px, 0.65vw, 8px);
+  letter-spacing: 0.07em;
+}
+
+.mission-loader-live-metrics span + span {
+  padding-left: clamp(9px, 1.4vw, 20px);
+  border-left: 1px solid rgba(86, 142, 153, 0.25);
+}
+
+.mission-loader-live-metrics b {
+  margin-left: 4px;
+  color: #73dce5;
+  font-weight: 500;
+}
+
 .mission-loader-counters {
   text-align: right;
 }
@@ -1233,6 +1327,10 @@ input[type="range"].tactical-slider::-moz-range-thumb {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .system-loading-screen {
+    transition-duration: 120ms;
+  }
+
   .earth-orbit,
   .mission-data-beam::after,
   .mission-hotspot,

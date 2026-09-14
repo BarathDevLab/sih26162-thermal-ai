@@ -17,14 +17,17 @@ import type {
   SiteTimelineResponse,
   SiteEvidenceResponse,
   SiteDetectionsResponse,
-  ImageryCacheSummary
+  ImageryCacheSummary,
+  SiteReviewHistoryResponse
 } from '../types/api';
 import {
   fetchSiteTimeline,
   fetchSiteEvidence,
   fetchSiteDetections,
-  fetchSiteImagery
+  fetchSiteImagery,
+  fetchSiteReviews
 } from '../services/api';
+import { AnalystReviewPanel } from './AnalystReviewPanel';
 
 interface SiteDrawerProps {
   site: SiteDetail | null;
@@ -33,7 +36,7 @@ interface SiteDrawerProps {
   onClose: () => void;
 }
 
-type TabType = 'OVERVIEW' | 'TIMELINE' | 'EVIDENCE' | 'SATELLITE' | 'RAW_FIRMS';
+type TabType = 'OVERVIEW' | 'TIMELINE' | 'EVIDENCE' | 'SATELLITE' | 'RAW_FIRMS' | 'REVIEW';
 
 const PRITHVI_STATUS_POLL_MS = 4_000;
 const PRITHVI_STATUS_POLL_LIMIT_MS = 10 * 60_000;
@@ -44,6 +47,7 @@ export const SiteDrawer: React.FC<SiteDrawerProps> = ({ site, asOfDate, onRefres
   const [evidenceData, setEvidenceData] = useState<SiteEvidenceResponse | null>(null);
   const [detectionsData, setDetectionsData] = useState<SiteDetectionsResponse | null>(null);
   const [imageryData, setImageryData] = useState<ImageryCacheSummary[]>([]);
+  const [reviewHistory, setReviewHistory] = useState<SiteReviewHistoryResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
 
   const siteId = site?.site_id;
@@ -60,13 +64,17 @@ export const SiteDrawer: React.FC<SiteDrawerProps> = ({ site, asOfDate, onRefres
       fetchSiteTimeline(siteId, asOfDate),
       fetchSiteEvidence(siteId, 5000, asOfDate),
       fetchSiteDetections(siteId, asOfDate),
-      fetchSiteImagery(siteId, asOfDate)
-    ]).then(async ([timeline, evidence, detections, imagery]) => {
+      fetchSiteImagery(siteId, asOfDate),
+      asOfDate === undefined && site?.model_a?.class_name === 'UNKNOWN'
+        ? fetchSiteReviews(siteId)
+        : Promise.resolve(null)
+    ]).then(async ([timeline, evidence, detections, imagery, reviews]) => {
       if (!active) return;
       if (timeline.status === 'fulfilled') setTimelineData(timeline.value);
       if (evidence.status === 'fulfilled') setEvidenceData(evidence.value);
       if (detections.status === 'fulfilled') setDetectionsData(detections.value);
       if (imagery.status === 'fulfilled') setImageryData(imagery.value);
+      if (reviews.status === 'fulfilled') setReviewHistory(reviews.value);
       setLoading(false);
 
       if (asOfDate === undefined) {
@@ -81,7 +89,7 @@ export const SiteDrawer: React.FC<SiteDrawerProps> = ({ site, asOfDate, onRefres
     return () => {
       active = false;
     };
-  }, [siteId, asOfDate, onRefreshSite]);
+  }, [siteId, site?.model_a?.class_name, asOfDate, onRefreshSite]);
 
   const prithviStatus = site?.model_a?.prithvi_status;
 
@@ -168,7 +176,10 @@ export const SiteDrawer: React.FC<SiteDrawerProps> = ({ site, asOfDate, onRefres
           { id: 'TIMELINE', label: 'Timeline' },
           { id: 'EVIDENCE', label: 'Evidence' },
           { id: 'SATELLITE', label: 'Satellite' },
-          { id: 'RAW_FIRMS', label: 'Detections' }
+          { id: 'RAW_FIRMS', label: 'Detections' },
+          ...(asOfDate === undefined && site.model_a?.class_name === 'UNKNOWN'
+            ? [{ id: 'REVIEW', label: 'Review' }]
+            : [])
         ].map((tab) => {
           const isActive = activeTab === tab.id;
           return (
@@ -674,6 +685,18 @@ export const SiteDrawer: React.FC<SiteDrawerProps> = ({ site, asOfDate, onRefres
               </div>
             )}
           </div>
+        )}
+
+        {activeTab === 'REVIEW' && asOfDate === undefined && site.model_a?.class_name === 'UNKNOWN' && (
+          <AnalystReviewPanel
+            key={site.site_id}
+            site={site}
+            evidence={evidenceData}
+            imagery={imageryData}
+            detections={detectionsData}
+            history={reviewHistory}
+            onHistoryChange={setReviewHistory}
+          />
         )}
       </div>
 

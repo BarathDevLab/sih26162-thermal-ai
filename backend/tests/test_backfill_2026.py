@@ -80,6 +80,8 @@ def test_backfill_dry_run_offline():
         assert res["total_windows"] == 1
         assert res["dry_run"] is True
         assert progress_events[-1]["phase"] == "SYNCING_FIRMS"
+        assert progress_events[-1]["phase_progress_percent"] == 100
+        assert progress_events[-1]["progress_percent"] == 70
         assert progress_events[-1]["completed_windows"] == 1
         assert progress_events[-1]["total_windows"] == 1
 

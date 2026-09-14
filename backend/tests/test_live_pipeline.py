@@ -38,6 +38,7 @@ def test_global_daily_model_b_decay():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     db = sessionmaker(bind=engine)()
+    progress_events = []
     try:
         db.add(SourceSite(site_id="SITE_B_TEST", latitude=20.0, longitude=75.0))
         db.add(SiteDailyActivity(
@@ -45,9 +46,16 @@ def test_global_daily_model_b_decay():
             detections=1, mean_frp=10.0, max_frp=10.0,
         ))
         db.commit()
-        res = run_global_daily_model_b_refresh(db, as_of_date=date.today())
+        res = run_global_daily_model_b_refresh(
+            db,
+            as_of_date=date.today(),
+            progress_callback=progress_events.append,
+        )
         assert res["status"] == "COMPLETED"
         assert res["sites_evaluated"] == 1
+        assert progress_events[0]["progress_percent"] == 0
+        assert progress_events[-1]["progress_percent"] == 100
+        assert progress_events[-1]["processed_sites"] == 1
         assert db.query(SiteModelB).one().state == "DORMANT"
         rerun = run_global_daily_model_b_refresh(db, as_of_date=date.today())
         assert rerun["status"] == "ALREADY_COMPLETED"

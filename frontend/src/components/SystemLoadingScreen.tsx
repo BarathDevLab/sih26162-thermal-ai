@@ -1,4 +1,4 @@
-import type { CSSProperties } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import {
   Cpu,
   Database,
@@ -16,6 +16,9 @@ interface SystemLoadingScreenProps {
   sitesReady: boolean;
   error?: string | null;
   catchup?: StartupCatchupStatus | null;
+  connectionAttempt?: number;
+  connectionDetail?: string;
+  retryDelayMs?: number | null;
 }
 
 const HOTSPOTS = [
@@ -25,19 +28,47 @@ const HOTSPOTS = [
   [72, 48, 'cyan'], [76, 57, 'cyan'], [81, 43, 'orange']
 ] as const;
 
+const BACKEND_STAGES = [
+  { phase: 'ACQUIRING_LOCK', label: 'DATABASE LOCK', icon: Database },
+  { phase: 'VERIFYING_ARTIFACTS', label: 'ARTIFACT INTEGRITY', icon: Cpu },
+  { phase: 'PLANNING_WINDOWS', label: 'FIRMS WINDOW PLAN', icon: Satellite },
+  { phase: 'SYNCING_FIRMS', label: 'FIRMS INGESTION', icon: Satellite },
+  { phase: 'REFRESHING_MODEL_B', label: 'MODEL B TEMPORAL STATE', icon: Database },
+  { phase: 'HYDRATING_WORLDCOVER', label: 'WORLDCOVER CONTEXT', icon: MapPinned },
+  { phase: 'MATERIALIZING_MODELS', label: 'MODEL A/C MATERIALIZE', icon: Cpu },
+  { phase: 'VERIFYING_COVERAGE', label: 'COVERAGE AUDIT', icon: Radar },
+  { phase: 'PUBLISHING_SNAPSHOT', label: 'SNAPSHOT PUBLISH', icon: Database },
+  { phase: 'ACTIVATING_LIVE', label: 'LIVE AUTHORIZATION', icon: RadioTower }
+] as const;
+
+const EXIT_TRANSITION_MS = 900;
+
 export function SystemLoadingScreen({
   visible,
   mapReady,
   backendReady,
   sitesReady,
   error,
-  catchup
+  catchup,
+  connectionAttempt = 0,
+  connectionDetail,
+  retryDelayMs
 }: SystemLoadingScreenProps) {
-  if (!visible) return null;
+  const [mounted, setMounted] = useState(visible);
+
+  useEffect(() => {
+    if (visible || !mounted) return;
+    const exitTimer = window.setTimeout(() => setMounted(false), EXIT_TRANSITION_MS);
+    return () => window.clearTimeout(exitTimer);
+  }, [mounted, visible]);
+
+  if (!mounted) return null;
 
   const missionActive = Boolean(catchup?.running || catchup?.status === 'COMPLETED');
-  const completed = [mapReady, backendReady, sitesReady].filter(Boolean).length;
-  const bootProgress = error ? 100 : Math.max(8, Math.round((completed / 3) * 100));
+  const bootProgress = Math.max(
+    3,
+    (backendReady ? 45 : 0) + (mapReady ? 25 : 0) + (sitesReady ? 30 : 0)
+  );
   const progress = missionActive
     ? Math.max(1, Math.min(100, Math.round(catchup?.progress_percent ?? 1)))
     : bootProgress;
@@ -49,34 +80,56 @@ export function SystemLoadingScreen({
         ? 'ESTABLISHING RUNTIME LINK'
         : !mapReady
           ? 'INITIALIZING MAP ENGINE'
-          : 'RESOLVING SITE CLUSTERS';
+          : !sitesReady
+            ? 'RESOLVING SITE CLUSTERS'
+            : 'OPERATIONAL PICTURE READY';
   const detail = missionActive
     ? catchup?.detail
     : error
-      ? 'Map interface available; the latest site viewport could not be synchronized.'
-      : 'Building the operational picture from local runtime intelligence.';
+      ? 'Initial site synchronization was interrupted. Retrying before interface activation.'
+      : !backendReady
+        ? connectionDetail ?? 'Waiting for the local backend to accept operational traffic.'
+        : sitesReady
+          ? 'All startup systems are ready. Transferring control to the command center.'
+          : 'Building the operational picture from local runtime intelligence.';
   const target = catchup?.target_date ?? 'DETECTING';
   const currentWindow = catchup?.current_window_start
     ? `${catchup.current_window_start} / ${catchup.current_window_end ?? catchup.current_window_start}`
     : missionActive ? 'AWAITING FIRMS WINDOW' : 'INITIAL BOOT';
+  const catchupPhase = catchup?.phase ?? 'ACQUIRING_LOCK';
+  const activeBackendStage = catchupPhase === 'LIVE_ACTIVATED'
+    ? BACKEND_STAGES.length
+    : BACKEND_STAGES.findIndex((stage) => stage.phase === catchupPhase);
+  const phaseProgress = Math.max(
+    0,
+    Math.min(100, Math.round(catchup?.phase_progress_percent ?? 0))
+  );
   const stages = missionActive
-    ? [
-        { label: 'FIRMS INGEST', readyAt: 70, activeFrom: 1, icon: Satellite },
-        { label: 'MODEL B STATE', readyAt: 78, activeFrom: 70, icon: Database },
-        { label: 'A/C MATERIALIZE', readyAt: 95, activeFrom: 78, icon: Cpu },
-        { label: 'LIVE AUTHORITY', readyAt: 100, activeFrom: 95, icon: RadioTower }
-      ]
+    ? BACKEND_STAGES.map((stage, index) => {
+        const ready = catchup?.status === 'COMPLETED' || index < activeBackendStage;
+        const active = catchup?.running && index === activeBackendStage;
+        return {
+          ...stage,
+          ready,
+          active,
+          progress: ready ? 100 : active ? phaseProgress : 0
+        };
+      })
     : [
-        { label: 'MAP ENGINE', ready: mapReady, icon: MapPinned },
-        { label: 'RUNTIME LINK', ready: backendReady, icon: Database },
-        { label: 'SITE CLUSTERS', ready: sitesReady, icon: Radar }
+        { label: 'BACKEND RUNTIME', ready: backendReady, active: !backendReady, progress: backendReady ? 100 : 0, icon: Database },
+        { label: 'MAP ENGINE', ready: mapReady, active: backendReady && !mapReady, progress: mapReady ? 100 : 0, icon: MapPinned },
+        { label: 'SITE CLUSTERS', ready: sitesReady, active: mapReady && backendReady && !sitesReady, progress: sitesReady ? 100 : 0, icon: Radar }
       ];
   const progressStyle = {
     '--mission-progress': `${progress * 3.6}deg`
   } as CSSProperties;
 
   return (
-    <div className="system-loading-screen" role="status" aria-live="polite">
+    <div
+      className={`system-loading-screen${visible ? '' : ' is-exiting'}`}
+      role="status"
+      aria-live="polite"
+    >
       <div className="system-loading-stars" aria-hidden="true" />
       <div className="system-loading-scanline" aria-hidden="true" />
       <div className="system-loading-frame" aria-hidden="true">
@@ -90,8 +143,8 @@ export function SystemLoadingScreen({
         </div>
         <div className="mission-loader-telemetry">
           <span>TARGET DATE <b>{target}</b></span>
-          <span>FIRMS WINDOWS <b>{catchup?.completed_windows ?? 0}/{catchup?.total_windows ?? 0}</b></span>
-          <span>DB RECORDS <b>{(catchup?.records_processed ?? 0).toLocaleString()}</b></span>
+          <span>{missionActive ? 'FIRMS WINDOWS' : 'LINK ATTEMPT'} <b>{missionActive ? `${catchup?.completed_windows ?? 0}/${catchup?.total_windows ?? 0}` : connectionAttempt}</b></span>
+          <span>DB INSERTED <b>{(catchup?.records_processed ?? 0).toLocaleString()}</b></span>
         </div>
       </header>
 
@@ -153,21 +206,25 @@ export function SystemLoadingScreen({
           <div className="mission-progress-sweep" />
           <div className="mission-progress-core">
             <strong>{progress}%</strong>
-            <span>ANALYZED</span>
+            <span>STACK READY</span>
           </div>
         </div>
       </main>
 
-      <aside className="mission-stage-rail" aria-label="Startup stages">
-        {stages.map((stage) => {
-          const ready = 'ready' in stage ? stage.ready : progress >= stage.readyAt;
-          const active = 'activeFrom' in stage && !ready && progress >= stage.activeFrom;
+      <aside className="mission-stage-rail" aria-label="Backend setup stages">
+        <h2>{missionActive ? 'BACKEND SETUP SEQUENCE' : 'INTERFACE BOOT SEQUENCE'}</h2>
+        {stages.map((stage, index) => {
           const Icon = stage.icon;
           return (
-            <div className={ready ? 'is-ready' : active ? 'is-active' : ''} key={stage.label}>
-              <Icon size={13} />
-              <span>{stage.label}</span>
-              <b>{ready ? 'SECURED' : active ? 'EXECUTING' : 'QUEUED'}</b>
+            <div className={stage.ready ? 'is-ready' : stage.active ? 'is-active' : ''} key={stage.label}>
+              <span className="mission-stage-index">{String(index + 1).padStart(2, '0')}</span>
+              <Icon size={12} />
+              <span className="mission-stage-name">{stage.label}</span>
+              <b>{stage.ready ? 'COMPLETE' : stage.active ? 'RUNNING' : 'QUEUED'}</b>
+              <div className="mission-stage-progress">
+                <i style={{ width: `${stage.progress}%` }} />
+              </div>
+              <em>{stage.progress}%</em>
             </div>
           );
         })}
@@ -185,10 +242,33 @@ export function SystemLoadingScreen({
             <span style={{ width: `${progress}%` }} />
           </div>
           <p>{detail}</p>
-          <small>{currentWindow}</small>
+          <small>
+            {catchup?.current_source ? `${catchup.current_source} // ` : ''}
+            {!missionActive && !backendReady && retryDelayMs
+              ? `LOCAL API // RETRY ${(retryDelayMs / 1_000).toFixed(1)}S`
+              : currentWindow}
+          </small>
+          {missionActive && (
+            <div className="mission-loader-live-metrics">
+              <span>FETCHED <b>{(catchup?.records_fetched ?? 0).toLocaleString()}</b></span>
+              <span>UNIQUE <b>{(catchup?.records_unique ?? 0).toLocaleString()}</b></span>
+              <span>INSERTED <b>{(catchup?.records_processed ?? 0).toLocaleString()}</b></span>
+              <span>REVISED <b>{(catchup?.records_revised ?? 0).toLocaleString()}</b></span>
+            </div>
+          )}
         </div>
         <div className="mission-loader-counters">
-          <span>A/C SITES <b>{catchup?.processed_sites ?? 0}/{catchup?.total_sites ?? 0}</b></span>
+          {catchup?.phase === 'REFRESHING_MODEL_B' ? (
+            <span>MODEL B SITES <b>{catchup.model_b_processed_sites}/{catchup.model_b_total_sites}</b></span>
+          ) : catchup?.phase === 'HYDRATING_WORLDCOVER' ? (
+            <span>WORLDCOVER SITES <b>{catchup.worldcover_processed_sites}/{catchup.worldcover_total_sites}</b></span>
+          ) : (
+            <span>A/C SITES <b>{catchup?.processed_sites ?? 0}/{catchup?.total_sites ?? 0}</b></span>
+          )}
+          {catchup?.worldcover_current_tile && (
+            <span>ACTIVE TILE <b>{catchup.worldcover_current_tile}</b></span>
+          )}
+          <span>PROMOTED / ALERTS <b>{catchup?.promoted_sites ?? 0} / {catchup?.alerts_generated ?? 0}</b></span>
           <span>MISSION <b>{catchup?.status ?? (error ? 'DEGRADED' : 'BOOTING')}</b></span>
         </div>
       </section>

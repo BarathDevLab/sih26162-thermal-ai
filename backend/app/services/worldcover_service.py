@@ -10,7 +10,7 @@ import os
 import time
 from pathlib import Path
 from collections import defaultdict
-from typing import Dict, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
 import numpy as np
 
@@ -115,6 +115,7 @@ class WorldCoverService:
     def get_fractions_many(
         self,
         locations: Mapping[str, Tuple[float, float]],
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> Tuple[
         Dict[str, Dict[str, Optional[float]]],
         Dict[str, str],
@@ -122,6 +123,26 @@ class WorldCoverService:
         """Extract many sites while opening each remote COG tile only once."""
         results: Dict[str, Dict[str, Optional[float]]] = {}
         errors: Dict[str, str] = {}
+        total_sites = len(locations)
+
+        def processed_count() -> int:
+            return len(set(results).union(errors))
+
+        def report_progress(tile: Optional[str], detail: str) -> None:
+            if progress_callback is None:
+                return
+            processed = processed_count()
+            try:
+                progress_callback({
+                    "processed_sites": processed,
+                    "total_sites": total_sites,
+                    "progress_percent": round(100 * processed / max(1, total_sites)),
+                    "current_tile": tile,
+                    "detail": detail,
+                })
+            except Exception:
+                logger.warning("WorldCover progress callback failed", exc_info=True)
+
         grouped = defaultdict(list)
         for site_id, coordinates in locations.items():
             latitude, longitude = map(float, coordinates)
@@ -138,17 +159,24 @@ class WorldCoverService:
             except (ValueError, OSError) as exc:
                 errors[site_id] = str(exc)
 
+        report_progress(
+            None,
+            f"Resolved {len(results)}/{total_sites} WorldCover sites from local cache.",
+        )
+
         try:
             configure_rasterio_environment()
             import rasterio
             from rasterio.windows import from_bounds
         except (ImportError, WorldCoverUnavailable) as exc:
             message = str(exc) or "rasterio is not installed."
-            return results, {**errors, **{
+            errors = {**errors, **{
                 site_id: message
                 for entries in grouped.values()
                 for site_id, _, _, _ in entries
             }}
+            report_progress(None, "WorldCover extraction stopped because rasterio is unavailable.")
+            return results, errors
 
         tile_groups = list(grouped.items())
         for tile_index, (tile, entries) in enumerate(tile_groups, start=1):
@@ -195,12 +223,23 @@ class WorldCoverService:
                                 raise
                             except Exception as exc:
                                 errors[site_id] = str(exc)
+                            if processed_count() % 250 == 0:
+                                report_progress(
+                                    tile,
+                                    f"Hydrated WorldCover for {processed_count()}/{total_sites} sites.",
+                                )
             except WorldCoverUnavailable:
                 raise
             except Exception as exc:
                 message = f"Unable to read WorldCover COG {url}: {exc}"
                 for site_id, _, _, _ in entries:
                     errors.setdefault(site_id, message)
+            report_progress(
+                tile,
+                f"Completed WorldCover tile {tile_index}/{len(tile_groups)}; "
+                f"processed {processed_count()}/{total_sites} sites.",
+            )
+        report_progress(None, f"WorldCover hydration complete for {len(results)}/{total_sites} sites.")
         return results, errors
 
     @staticmethod

@@ -4,7 +4,8 @@ import {
   ChevronUp,
   Crosshair,
   Check,
-  Radio
+  Radio,
+  ClipboardCheck
 } from 'lucide-react';
 import type { AlertItem } from '../types/api';
 import { acknowledgeAlert } from '../services/api';
@@ -172,16 +173,31 @@ export const AlertRail: React.FC<AlertRailProps> = ({
                         <span>Locate</span>
                       </button>
 
-                      <button
-                        onClick={(e) => handleAck(alert.alert_id, e)}
-                        disabled={ackingId === alert.alert_id}
-                        type="button"
-                        className="px-2.5 py-1 rounded-full bg-white/5 hover:bg-emerald-500/20 text-slate-400 hover:text-emerald-300 border border-white/10 hover:border-emerald-500/40 flex items-center gap-1 transition-all disabled:opacity-50 active:scale-95 cursor-pointer"
-                        title="Acknowledge alert"
-                      >
-                        <Check className="w-3 h-3 text-emerald-400" />
-                        <span>{ackingId === alert.alert_id ? '...' : 'Ack'}</span>
-                      </button>
+                      {alert.evidence_required && alert.a_class === 'UNKNOWN' ? (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onJumpToSite(alert.site_id, alert.latitude ?? undefined, alert.longitude ?? undefined);
+                          }}
+                          type="button"
+                          className="px-2.5 py-1 rounded-full bg-violet-500/10 hover:bg-violet-500/20 text-violet-300 border border-violet-400/30 hover:border-violet-400/60 flex items-center gap-1 transition-all active:scale-95 cursor-pointer"
+                          title="Open the UNKNOWN analyst review workflow"
+                        >
+                          <ClipboardCheck className="w-3 h-3" />
+                          <span>Review</span>
+                        </button>
+                      ) : (
+                        <button
+                          onClick={(e) => handleAck(alert.alert_id, e)}
+                          disabled={ackingId === alert.alert_id}
+                          type="button"
+                          className="px-2.5 py-1 rounded-full bg-white/5 hover:bg-emerald-500/20 text-slate-400 hover:text-emerald-300 border border-white/10 hover:border-emerald-500/40 flex items-center gap-1 transition-all disabled:opacity-50 active:scale-95 cursor-pointer"
+                          title="Acknowledge alert"
+                        >
+                          <Check className="w-3 h-3 text-emerald-400" />
+                          <span>{ackingId === alert.alert_id ? '...' : 'Ack'}</span>
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>

@@ -16,7 +16,11 @@ import type {
   AlertFeedResponse,
   AlertAckResponse,
   ReplaySnapshotResponse,
-  AlertItem
+  AlertItem,
+  SiteReviewHistoryResponse,
+  SiteReviewItem,
+  SiteReviewSubmitRequest,
+  ReviewQueueResponse
 } from '../types/api';
 
 const API_BASE = '/api/v1';
@@ -132,6 +136,34 @@ export async function acknowledgeAlert(
     body: JSON.stringify({ acknowledged_by: acknowledgedBy })
   });
   return handleResponse<AlertAckResponse>(res);
+}
+
+export async function fetchReviewQueue(
+  status: string = 'OPEN',
+  limit: number = 100
+): Promise<ReviewQueueResponse> {
+  const params = new URLSearchParams({ status, limit: String(limit) });
+  const res = await fetch(`${API_BASE}/reviews/queue?${params}`);
+  return handleResponse<ReviewQueueResponse>(res);
+}
+
+export async function fetchSiteReviews(siteId: string): Promise<SiteReviewHistoryResponse> {
+  const res = await fetch(`${API_BASE}/sites/${encodeURIComponent(siteId)}/reviews`, {
+    cache: 'no-store'
+  });
+  return handleResponse<SiteReviewHistoryResponse>(res);
+}
+
+export async function submitSiteReview(
+  siteId: string,
+  request: SiteReviewSubmitRequest
+): Promise<SiteReviewItem> {
+  const res = await fetch(`${API_BASE}/sites/${encodeURIComponent(siteId)}/reviews`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  return handleResponse<SiteReviewItem>(res);
 }
 
 export async function fetchReplaySnapshot(

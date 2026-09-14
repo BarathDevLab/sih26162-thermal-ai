@@ -109,6 +109,7 @@ class BackfillOrchestrator:
             report_progress(
                 phase="VERIFYING_ARTIFACTS",
                 progress_percent=3,
+                phase_progress_percent=0,
                 detail="Verifying frozen model artifacts and database prerequisites.",
             )
             logger.info("Verifying packaged runtime artifacts and database prerequisites...")
@@ -130,6 +131,7 @@ class BackfillOrchestrator:
         report_progress(
             phase="PLANNING_WINDOWS",
             progress_percent=7,
+            phase_progress_percent=100,
             total_windows=len(windows),
             completed_windows=0,
             detail=f"Planned {len(windows)} audited FIRMS windows through {target}.",
@@ -191,9 +193,18 @@ class BackfillOrchestrator:
                         report_progress(
                             phase="SYNCING_FIRMS",
                             progress_percent=7 + round(63 * index / max(1, len(windows))),
+                            phase_progress_percent=round(100 * index / max(1, len(windows))),
                             completed_windows=index,
                             total_windows=len(windows),
+                            current_source=window_source,
+                            current_window_start=window_start_date.isoformat(),
+                            current_window_end=window_end.isoformat(),
                             records_processed=totals["inserted"],
+                            records_fetched=totals["fetched"],
+                            records_unique=totals["unique"],
+                            records_revised=totals["revised"],
+                            promoted_sites=totals["promoted"],
+                            alerts_generated=totals["alerts"],
                             detail=f"Verified cached FIRMS window {window_start_date} through {window_end}.",
                         )
                         continue
@@ -203,11 +214,18 @@ class BackfillOrchestrator:
                 report_progress(
                     phase="SYNCING_FIRMS",
                     progress_percent=7 + round(63 * (index - 1) / max(1, len(windows))),
+                    phase_progress_percent=round(100 * (index - 1) / max(1, len(windows))),
                     completed_windows=index - 1,
                     total_windows=len(windows),
+                    current_source=window_source,
                     current_window_start=window_start_date.isoformat(),
                     current_window_end=window_end.isoformat(),
                     records_processed=totals["inserted"],
+                    records_fetched=totals["fetched"],
+                    records_unique=totals["unique"],
+                    records_revised=totals["revised"],
+                    promoted_sites=totals["promoted"],
+                    alerts_generated=totals["alerts"],
                     detail=f"Acquiring FIRMS window {window_start_date} through {window_end}.",
                 )
                 rows = self.client.fetch_area_detections(
@@ -241,11 +259,18 @@ class BackfillOrchestrator:
                 report_progress(
                     phase="SYNCING_FIRMS",
                     progress_percent=7 + round(63 * index / max(1, len(windows))),
+                    phase_progress_percent=round(100 * index / max(1, len(windows))),
                     completed_windows=index,
                     total_windows=len(windows),
+                    current_source=window_source,
                     current_window_start=window_start_date.isoformat(),
                     current_window_end=window_end.isoformat(),
                     records_processed=totals["inserted"],
+                    records_fetched=totals["fetched"],
+                    records_unique=totals["unique"],
+                    records_revised=totals["revised"],
+                    promoted_sites=totals["promoted"],
+                    alerts_generated=totals["alerts"],
                     detail=f"Ingested FIRMS window {window_start_date} through {window_end}.",
                 )
 
@@ -254,16 +279,31 @@ class BackfillOrchestrator:
             if db is not None:
                 report_progress(
                     phase="REFRESHING_MODEL_B",
-                    progress_percent=73,
+                    progress_percent=70,
+                    phase_progress_percent=0,
                     detail=f"Refreshing deterministic temporal states through {target}.",
                 )
                 logger.info("Refreshing deterministic Model B through %s...", target)
-                run_global_daily_model_b_refresh(db, target)
+                def report_model_b(payload: Dict[str, Any]) -> None:
+                    phase_percent = int(payload.get("progress_percent", 0))
+                    report_progress(
+                        phase="REFRESHING_MODEL_B",
+                        progress_percent=70 + round(7 * phase_percent / 100),
+                        phase_progress_percent=phase_percent,
+                        model_b_processed_sites=int(payload.get("processed_sites", 0)),
+                        model_b_total_sites=int(payload.get("total_sites", 0)),
+                        detail=str(payload.get("detail", "Refreshing Model B temporal states.")),
+                    )
+
+                run_global_daily_model_b_refresh(
+                    db, target, progress_callback=report_model_b
+                )
                 report_progress(
                     phase="MATERIALIZING_MODELS",
-                    progress_percent=78,
+                    progress_percent=77,
+                    phase_progress_percent=0,
                     processed_sites=0,
-                    detail="Materializing Model A identity and Model C anomaly results.",
+                    detail="Preparing WorldCover context and Model A/C materialization.",
                 )
                 logger.info("Refreshing Model A/C for sites changed since %s...", model_refresh_start)
                 degraded_a = self._refresh_2026_stack(
@@ -272,6 +312,7 @@ class BackfillOrchestrator:
                 report_progress(
                     phase="VERIFYING_COVERAGE",
                     progress_percent=95,
+                    phase_progress_percent=0,
                     detail=f"Verifying contiguous audited FIRMS coverage through {target}.",
                 )
                 logger.info("Verifying audited FIRMS date coverage through %s...", target)
@@ -285,6 +326,7 @@ class BackfillOrchestrator:
                 report_progress(
                     phase="PUBLISHING_SNAPSHOT",
                     progress_percent=98,
+                    phase_progress_percent=0,
                     detail="Publishing the atomic CURRENT A/B/C operational snapshot.",
                 )
                 snapshot = self._publish_snapshot(db, target, source)
@@ -295,6 +337,7 @@ class BackfillOrchestrator:
                 report_progress(
                     phase="ACTIVATING_LIVE",
                     progress_percent=99,
+                    phase_progress_percent=50,
                     detail="Snapshot published; executing final readiness authorization.",
                 )
         except Exception:
@@ -502,20 +545,58 @@ class BackfillOrchestrator:
                 "Hydrating WorldCover for %d sites in tile batches",
                 len(missing_worldcover),
             )
+            if progress_callback is not None:
+                progress_callback(
+                    phase="HYDRATING_WORLDCOVER",
+                    progress_percent=77,
+                    phase_progress_percent=0,
+                    worldcover_processed_sites=0,
+                    worldcover_total_sites=len(missing_worldcover),
+                    worldcover_current_tile=None,
+                    detail=f"Hydrating WorldCover context for {len(missing_worldcover)} uncached sites.",
+                )
+
+            def report_worldcover(payload: Dict[str, Any]) -> None:
+                phase_percent = int(payload.get("progress_percent", 0))
+                if progress_callback is not None:
+                    progress_callback(
+                        phase="HYDRATING_WORLDCOVER",
+                        progress_percent=77 + round(5 * phase_percent / 100),
+                        phase_progress_percent=phase_percent,
+                        worldcover_processed_sites=int(payload.get("processed_sites", 0)),
+                        worldcover_total_sites=int(payload.get("total_sites", 0)),
+                        worldcover_current_tile=payload.get("current_tile"),
+                        detail=str(payload.get("detail", "Hydrating WorldCover context.")),
+                    )
+
             fractions, worldcover_errors = (
-                self.pipeline.model_a.worldcover.get_fractions_many(missing_worldcover)
+                self.pipeline.model_a.worldcover.get_fractions_many(
+                    missing_worldcover,
+                    progress_callback=report_worldcover,
+                )
             )
             for site_id, extracted in fractions.items():
                 site = sites_by_id[site_id]
                 site.land_cover = {**(site.land_cover or {}), **extracted}
             unavailable.update(worldcover_errors)
             db.commit()
+        elif progress_callback is not None:
+            progress_callback(
+                phase="HYDRATING_WORLDCOVER",
+                progress_percent=82,
+                phase_progress_percent=100,
+                worldcover_processed_sites=0,
+                worldcover_total_sites=0,
+                worldcover_current_tile=None,
+                detail="WorldCover context is already cached for all affected sites.",
+            )
 
         total_sites = len(site_ids)
         if progress_callback is not None:
             progress_callback(
                 phase="MATERIALIZING_MODELS",
-                progress_percent=78,
+                progress_percent=82,
+                phase_progress_percent=0,
                 processed_sites=0,
                 total_sites=total_sites,
                 detail=f"Materializing Model A/C for {total_sites} affected sites.",
@@ -547,7 +628,8 @@ class BackfillOrchestrator:
             if progress_callback is not None and (index % 250 == 0 or index == total_sites):
                 progress_callback(
                     phase="MATERIALIZING_MODELS",
-                    progress_percent=78 + round(16 * index / max(1, total_sites)),
+                    progress_percent=82 + round(12 * index / max(1, total_sites)),
+                    phase_progress_percent=round(100 * index / max(1, total_sites)),
                     processed_sites=index,
                     total_sites=total_sites,
                     detail=f"Materialized Model A/C for {index}/{total_sites} affected sites.",

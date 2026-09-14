@@ -1,4 +1,4 @@
-"""Container entrypoint: initialize tables, apply the idempotent migration, start API."""
+"""Container entrypoint: initialize tables, apply idempotent migrations, start API."""
 
 from pathlib import Path
 import os
@@ -15,11 +15,11 @@ from backend.app.db.session import engine, init_db
 def main() -> None:
     init_db()
     if engine.url.drivername.startswith("postgresql"):
-        migration = ROOT / "backend/migrations/001_runtime_overhaul.sql"
         connection = engine.raw_connection()
         try:
-            connection.execute(migration.read_text(encoding="utf-8"))
-            connection.commit()
+            for migration in sorted((ROOT / "backend/migrations").glob("*.sql")):
+                connection.execute(migration.read_text(encoding="utf-8"))
+                connection.commit()
         finally:
             connection.close()
     os.execvp(

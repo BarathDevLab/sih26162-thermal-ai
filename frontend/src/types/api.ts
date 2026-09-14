@@ -16,6 +16,7 @@ export interface StartupCatchupStatus {
   running: boolean;
   phase: string;
   progress_percent: number;
+  phase_progress_percent: number;
   source_date: string | null;
   target_date: string | null;
   completed_windows: number;
@@ -23,10 +24,22 @@ export interface StartupCatchupStatus {
   current_window_start: string | null;
   current_window_end: string | null;
   records_processed: number;
+  records_fetched: number;
+  records_unique: number;
+  records_revised: number;
+  promoted_sites: number;
+  alerts_generated: number;
+  current_source: string | null;
+  model_b_processed_sites: number;
+  model_b_total_sites: number;
+  worldcover_processed_sites: number;
+  worldcover_total_sites: number;
+  worldcover_current_tile: string | null;
   processed_sites: number;
   total_sites: number;
   started_at: string | null;
   ended_at: string | null;
+  updated_at: string | null;
   detail: string;
 }
 
@@ -270,6 +283,73 @@ export interface AlertAckResponse {
   acknowledged_by: string;
   updated_at: string;
   message: string;
+}
+
+export type ReviewDetermination = 'INDUSTRIAL' | 'NONINDUSTRIAL' | 'REMAIN_UNKNOWN';
+export type ReviewConfidence = 'HIGH' | 'MEDIUM' | 'LOW';
+
+export interface SiteReviewItem {
+  review_id: string;
+  site_id: string;
+  alert_id: string | null;
+  supersedes_review_id: string | null;
+  review_status: 'IN_REVIEW' | 'COMPLETED' | 'ESCALATED';
+  determination: ReviewDetermination | null;
+  confidence: ReviewConfidence | null;
+  consensus_status: 'NOT_APPLICABLE' | 'SINGLE_REVIEW' | 'VERIFIED' | 'CONFLICT';
+  reason_codes: string[];
+  notes: string | null;
+  evidence_refs: string[];
+  reviewed_by: string;
+  reviewed_at: string;
+  country: string;
+  training_eligible: boolean;
+  model_a_class: string | null;
+  model_a_probability: number | null;
+  model_a_decision: string | null;
+  model_stack_version: string;
+  feature_version: string | null;
+}
+
+export interface SiteReviewHistoryResponse {
+  site_id: string;
+  queue_status: 'PENDING' | 'IN_REVIEW' | 'AWAITING_VERIFICATION' | 'CONFLICT' | 'COMPLETED';
+  reviews: SiteReviewItem[];
+}
+
+export interface SiteReviewSubmitRequest {
+  reviewed_by: string;
+  review_status: 'IN_REVIEW' | 'COMPLETED' | 'ESCALATED';
+  determination?: ReviewDetermination;
+  confidence?: ReviewConfidence;
+  reason_codes: string[];
+  notes?: string;
+  evidence_refs: string[];
+  alert_id?: string;
+  country?: string;
+}
+
+export interface ReviewQueueItem {
+  site_id: string;
+  latitude: number;
+  longitude: number;
+  alert_id: string;
+  alert_type: string;
+  alert_level: string;
+  headline: string;
+  site_day: string;
+  queue_status: SiteReviewHistoryResponse['queue_status'];
+  model_a_probability: number | null;
+  prithvi_probability: number | null;
+  prithvi_status: string;
+  model_b_state: string | null;
+  model_c_status: string | null;
+  latest_review: SiteReviewItem | null;
+}
+
+export interface ReviewQueueResponse {
+  total_reviews: number;
+  items: ReviewQueueItem[];
 }
 
 export interface ReplaySnapshotResponse {
