@@ -184,4 +184,10 @@ CREATE TABLE IF NOT EXISTS firms_backfill_windows (
 CREATE INDEX IF NOT EXISTS idx_backfill_windows_completion
     ON firms_backfill_windows (status, window_end);
 
+-- The viewport endpoint resolves at most one current alert per site. This
+-- ordered composite index avoids repeated scans of the alert history while
+-- panning or zooming the operational map.
+CREATE INDEX IF NOT EXISTS idx_alerts_site_status_updated
+    ON alerts (site_id, status, updated_at DESC, alert_id DESC);
+
 COMMIT;

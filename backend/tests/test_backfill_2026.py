@@ -61,6 +61,7 @@ def test_available_windows_reject_gap_in_source_family():
 
 def test_backfill_dry_run_offline():
     client = FirmsClient(offline_mode=True)
+    progress_events = []
     with tempfile.TemporaryDirectory() as tmp_dir:
         orchestrator = BackfillOrchestrator(
             firms_client=client,
@@ -70,13 +71,17 @@ def test_backfill_dry_run_offline():
         res = orchestrator.run_backfill(
             start_date="2026-01-01",
             end_date="2026-01-02",
-            dry_run=True
+            dry_run=True,
+            progress_callback=progress_events.append,
         )
 
         assert res["start_date"] == "2026-01-01"
         assert res["end_date"] == "2026-01-02"
         assert res["total_windows"] == 1
         assert res["dry_run"] is True
+        assert progress_events[-1]["phase"] == "SYNCING_FIRMS"
+        assert progress_events[-1]["completed_windows"] == 1
+        assert progress_events[-1]["total_windows"] == 1
 
 
 def test_incremental_stack_refresh_only_scores_sites_active_after_snapshot():

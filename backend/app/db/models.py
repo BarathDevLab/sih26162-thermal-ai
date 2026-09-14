@@ -319,6 +319,7 @@ class Alert(Base):
 
     __table_args__ = (
         Index("idx_alerts_severity_updated", "alert_level", "updated_at"),
+        Index("idx_alerts_site_status_updated", "site_id", "status", "updated_at", "alert_id"),
     )
 
 

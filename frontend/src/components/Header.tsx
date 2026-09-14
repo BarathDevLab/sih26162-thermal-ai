@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { PanelLeft, Bell, Settings, Layers, Radio, Satellite, Volume2, VolumeX, X } from 'lucide-react';
+import { Bell, Settings, Layers, Radio, Satellite, Volume2, VolumeX, X } from 'lucide-react';
 import type { HealthCheck } from '../types/api';
 
 interface HeaderProps {
@@ -52,8 +52,6 @@ export const Header: React.FC<HeaderProps> = ({
   activeRate = '99.98%',
   industrialCount = 1408,
   alertCount = 3,
-  sidebarOpen = true,
-  onToggleSidebar,
   alertsOpen = true,
   onToggleAlerts
 }) => {

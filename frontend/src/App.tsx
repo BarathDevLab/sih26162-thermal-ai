@@ -1,19 +1,20 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Globe, Satellite, Radio } from 'lucide-react';
 import { Header } from './components/Header';
 import { SidebarFilters } from './components/SidebarFilters';
-import { MapContainer } from './components/MapContainer';
 import { SiteDrawer } from './components/SiteDrawer';
 import { AlertRail } from './components/AlertRail';
 import { ReplayScrubber } from './components/ReplayScrubber';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { SystemLoadingScreen } from './components/SystemLoadingScreen';
 import type {
   SystemStats,
   HealthCheck,
   SiteGeoJSONFeatureCollection,
   SiteDetail,
   AlertItem,
-  FilterState
+  FilterState,
+  LiveRuntimeStatus
 } from './types/api';
 import {
   fetchHealth,
@@ -21,9 +22,14 @@ import {
   fetchSitesInBBox,
   fetchSiteDetail,
   fetchAlerts,
+  fetchLiveStatus,
   fetchReplaySnapshot,
   subscribeToAlertStream
 } from './services/api';
+
+const MapContainer = lazy(() => import('./components/MapContainer').then(module => ({
+  default: module.MapContainer
+})));
 
 const DEFAULT_FILTERS: FilterState = {
   aClasses: ['INDUSTRIAL', 'NONINDUSTRIAL', 'UNKNOWN', 'UNAVAILABLE'],
@@ -42,8 +48,18 @@ const DEFAULT_FILTERS: FilterState = {
   spikeHeightScale: 2.0
 };
 
-const VIEWPORT_REQUEST_DEBOUNCE_MS = 180;
-const VIEWPORT_CACHE_SIZE = 24;
+const VIEWPORT_REQUEST_DEBOUNCE_MS = 45;
+const VIEWPORT_CACHE_SIZE = 8;
+const VIEWPORT_CACHE_FEATURE_BUDGET = 40_000;
+
+interface ViewportCacheEntry {
+  data: SiteGeoJSONFeatureCollection;
+  bbox: [number, number, number, number];
+  limit: number;
+  mode: 'LIVE' | 'REPLAY';
+  replayDate: string;
+  cachedAt: number;
+}
 
 function viewportLimit(bbox: [number, number, number, number]): number {
   const longitudeSpan = Math.abs(bbox[2] - bbox[0]);
@@ -59,7 +75,31 @@ function viewportCacheKey(
   bbox: [number, number, number, number],
   limit: number
 ): string {
-  return [mode, mode === 'REPLAY' ? replayDate : '', limit, ...bbox.map(value => value.toFixed(4))].join('|');
+  return [mode, mode === 'REPLAY' ? replayDate : '', limit, ...bbox.map(value => value.toFixed(2))].join('|');
+}
+
+function expandBBox(
+  bbox: [number, number, number, number],
+  paddingRatio = 0.18
+): [number, number, number, number] {
+  const longitudePadding = Math.abs(bbox[2] - bbox[0]) * paddingRatio;
+  const latitudePadding = Math.abs(bbox[3] - bbox[1]) * paddingRatio;
+  return [
+    Math.max(-180, bbox[0] - longitudePadding),
+    Math.max(-90, bbox[1] - latitudePadding),
+    Math.min(180, bbox[2] + longitudePadding),
+    Math.min(90, bbox[3] + latitudePadding)
+  ];
+}
+
+function bboxContains(
+  outer: [number, number, number, number],
+  inner: [number, number, number, number]
+): boolean {
+  return outer[0] <= inner[0]
+    && outer[1] <= inner[1]
+    && outer[2] >= inner[2]
+    && outer[3] >= inner[3];
 }
 
 export default function App() {
@@ -81,9 +121,14 @@ export default function App() {
   const [sitesData, setSitesData] = useState<SiteGeoJSONFeatureCollection | null>(null);
   const [sitesLoading, setSitesLoading] = useState<boolean>(false);
   const [sitesError, setSitesError] = useState<string | null>(null);
+  const [bootstrapSettled, setBootstrapSettled] = useState<boolean>(false);
+  const [telemetryReady, setTelemetryReady] = useState<boolean>(false);
+  const [liveRuntime, setLiveRuntime] = useState<LiveRuntimeStatus | null>(null);
+  const [mapReady, setMapReady] = useState<boolean>(false);
+  const [initialSitesRendered, setInitialSitesRendered] = useState<boolean>(false);
   const sitesRequestId = useRef(0);
   const sitesAbortController = useRef<AbortController | null>(null);
-  const sitesCache = useRef<Map<string, SiteGeoJSONFeatureCollection>>(new Map());
+  const sitesCache = useRef<Map<string, ViewportCacheEntry>>(new Map());
   const [selectedSiteId, setSelectedSiteId] = useState<string | null>(null);
   const [selectedSite, setSelectedSite] = useState<SiteDetail | null>(null);
   const selectedSiteRequestId = useRef(0);
@@ -109,21 +154,27 @@ export default function App() {
   useEffect(() => {
     const initTelemetry = async () => {
       try {
-        const [h, s, a] = await Promise.all([
+        const [h, s, a, runtime] = await Promise.all([
           fetchHealth(),
           fetchStats(),
-          fetchAlerts()
+          fetchAlerts(),
+          fetchLiveStatus()
         ]);
         setHealth(h);
         setStats(s);
         setAlerts(a.alerts);
+        setLiveRuntime(runtime);
+        setTelemetryReady(true);
         const liveReady = h.status === 'READY' || h.status === 'DEGRADED_PRITHVI_UNAVAILABLE';
         setMode(liveReady ? 'LIVE' : 'REPLAY');
         if (!liveReady && s.latest_firms_date) {
           setReplayDate(s.latest_firms_date);
         }
       } catch (err) {
+        setTelemetryReady(false);
         console.error('Telemetry bootstrap failed:', err);
+      } finally {
+        setBootstrapSettled(true);
       }
     };
 
@@ -132,27 +183,41 @@ export default function App() {
 
   // A stale backend catches up in the background. Poll readiness so the UI
   // enables Live automatically when the new common snapshot is published.
+  const readinessStatus = health?.status;
   useEffect(() => {
-    const liveReady = health?.status === 'READY' || health?.status === 'DEGRADED_PRITHVI_UNAVAILABLE';
-    if (!health || liveReady) return;
+    const liveReady = readinessStatus === 'READY' || readinessStatus === 'DEGRADED_PRITHVI_UNAVAILABLE';
+    if (!readinessStatus || liveReady) return;
 
-    const interval = window.setInterval(async () => {
+    let active = true;
+    const refreshReadiness = async () => {
       try {
-        const nextHealth = await fetchHealth();
+        const [nextHealth, nextRuntime] = await Promise.all([
+          fetchHealth(),
+          fetchLiveStatus()
+        ]);
+        if (!active) return;
         setHealth(nextHealth);
+        setLiveRuntime(nextRuntime);
         const nextLiveReady = nextHealth.status === 'READY' || nextHealth.status === 'DEGRADED_PRITHVI_UNAVAILABLE';
         if (nextLiveReady) {
           const nextStats = await fetchStats();
+          if (!active) return;
           setStats(nextStats);
           setMode('LIVE');
         }
       } catch (err) {
         console.error('Readiness refresh failed:', err);
       }
-    }, 10_000);
+    };
 
-    return () => window.clearInterval(interval);
-  }, [health]);
+    void refreshReadiness();
+    const interval = window.setInterval(() => void refreshReadiness(), 2_000);
+
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [readinessStatus]);
 
   // 2. Real-Time Alert Stream Subscription
   useEffect(() => {
@@ -184,15 +249,31 @@ export default function App() {
 
     const requestId = ++sitesRequestId.current;
     const limit = viewportLimit(currentBBox);
-    const cacheKey = viewportCacheKey(mode, replayDate, currentBBox, limit);
-    const cached = sitesCache.current.get(cacheKey);
-    if (cached) {
-      sitesCache.current.delete(cacheKey);
-      sitesCache.current.set(cacheKey, cached);
-      setSitesData(cached);
+    sitesAbortController.current?.abort();
+    sitesAbortController.current = null;
+
+    const cachedMatch = Array.from(sitesCache.current.entries()).find(([, entry]) => (
+      entry.mode === mode
+      && entry.replayDate === (mode === 'REPLAY' ? replayDate : '')
+      && entry.limit >= limit
+      && bboxContains(entry.bbox, currentBBox)
+    ));
+    if (cachedMatch) {
+      const [cachedKey, cachedEntry] = cachedMatch;
+      sitesCache.current.delete(cachedKey);
+      sitesCache.current.set(cachedKey, cachedEntry);
+      setSitesData(cachedEntry.data);
+      setSitesError(null);
+
+      const freshnessMs = mode === 'LIVE' ? 30_000 : 5 * 60_000;
+      if (Date.now() - cachedEntry.cachedAt < freshnessMs) {
+        setSitesLoading(false);
+        return;
+      }
     }
 
-    sitesAbortController.current?.abort();
+    const requestBBox = expandBBox(currentBBox);
+    const cacheKey = viewportCacheKey(mode, replayDate, requestBBox, limit);
     const controller = new AbortController();
     sitesAbortController.current = controller;
     setSitesLoading(true);
@@ -200,9 +281,9 @@ export default function App() {
     try {
       let data: SiteGeoJSONFeatureCollection;
       if (mode === 'LIVE') {
-        data = await fetchSitesInBBox(currentBBox, { limit }, controller.signal);
+        data = await fetchSitesInBBox(requestBBox, { limit }, controller.signal);
       } else {
-        const replayData = await fetchReplaySnapshot(replayDate, currentBBox, limit, controller.signal);
+        const replayData = await fetchReplaySnapshot(replayDate, requestBBox, limit, controller.signal);
         data = {
           type: 'FeatureCollection',
           features: replayData.features,
@@ -213,10 +294,25 @@ export default function App() {
       }
 
       if (requestId === sitesRequestId.current) {
-        sitesCache.current.set(cacheKey, data);
-        while (sitesCache.current.size > VIEWPORT_CACHE_SIZE) {
+        sitesCache.current.set(cacheKey, {
+          data,
+          bbox: requestBBox,
+          limit,
+          mode,
+          replayDate: mode === 'REPLAY' ? replayDate : '',
+          cachedAt: Date.now()
+        });
+        let cachedFeatureCount = Array.from(sitesCache.current.values()).reduce(
+          (sum, entry) => sum + entry.data.features.length,
+          0
+        );
+        while (
+          sitesCache.current.size > VIEWPORT_CACHE_SIZE
+          || cachedFeatureCount > VIEWPORT_CACHE_FEATURE_BUDGET
+        ) {
           const oldestKey = sitesCache.current.keys().next().value;
           if (oldestKey === undefined) break;
+          cachedFeatureCount -= sitesCache.current.get(oldestKey)?.data.features.length ?? 0;
           sitesCache.current.delete(oldestKey);
         }
         setSitesData(data);
@@ -224,7 +320,7 @@ export default function App() {
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
       console.error('Error fetching sites:', err);
-      if (requestId === sitesRequestId.current) {
+      if (requestId === sitesRequestId.current && !cachedMatch) {
         setSitesError(err instanceof Error ? err.message : 'Unable to load sites');
       }
     } finally {
@@ -295,21 +391,25 @@ export default function App() {
       {/* Full-bleed map canvas covers the entire screen */}
       <div className="absolute inset-0">
         <ErrorBoundary fallbackTitle="Tactical Map Rendering Error">
-          <MapContainer
-            sitesData={sitesData}
-            selectedSiteId={selectedSiteId}
-            onSelectSite={(id) => setSelectedSiteId(id)}
-            onBoundsChange={(bbox) => setCurrentBBox(bbox)}
-            filters={filters}
-            is3D={is3D}
-            basemapMode={basemapMode}
-            show3DColumns={show3DColumns}
-            showSatellites={showSatellites}
-            showSwaths={showSwaths}
-            showHeatBloom={showHeatBloom}
-            focusedCoordinates={focusedCoordinates}
-            isLoading={sitesLoading}
-          />
+          <Suspense fallback={null}>
+            <MapContainer
+              sitesData={sitesData}
+              selectedSiteId={selectedSiteId}
+              onSelectSite={(id) => setSelectedSiteId(id)}
+              onBoundsChange={(bbox) => setCurrentBBox(bbox)}
+              filters={filters}
+              is3D={is3D}
+              basemapMode={basemapMode}
+              show3DColumns={show3DColumns}
+              showSatellites={showSatellites}
+              showSwaths={showSwaths}
+              showHeatBloom={showHeatBloom}
+              focusedCoordinates={focusedCoordinates}
+              isLoading={sitesLoading}
+              onMapReady={() => setMapReady(true)}
+              onSitesRendered={() => setInitialSitesRendered(true)}
+            />
+          </Suspense>
         </ErrorBoundary>
       </div>
 
@@ -492,6 +592,24 @@ export default function App() {
           />
         </div>
       )}
+
+      <SystemLoadingScreen
+        visible={
+          !mapReady
+          || !bootstrapSettled
+          || (!initialSitesRendered && !sitesError)
+          || Boolean(liveRuntime?.startup_catchup.running)
+          || Boolean(
+            health?.status === 'STALE_BACKFILL'
+            && liveRuntime?.startup_catchup.status === 'COMPLETED'
+          )
+        }
+        mapReady={mapReady}
+        backendReady={telemetryReady}
+        sitesReady={initialSitesRendered}
+        error={sitesError}
+        catchup={liveRuntime?.startup_catchup ?? null}
+      />
     </div>
   );
 }

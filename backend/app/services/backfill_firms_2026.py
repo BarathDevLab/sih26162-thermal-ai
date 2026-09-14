@@ -9,7 +9,7 @@ import logging
 import os
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
@@ -87,7 +87,16 @@ class BackfillOrchestrator:
         bbox: str = DEFAULT_INDIA_BBOX,
         dry_run: bool = False,
         update_db: bool = False,
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> Dict[str, Any]:
+        def report_progress(**payload: Any) -> None:
+            if progress_callback is None:
+                return
+            try:
+                progress_callback(payload)
+            except Exception:
+                logger.warning("Backfill progress callback failed", exc_info=True)
+
         start = datetime.strptime(start_date, "%Y-%m-%d").date()
         target = datetime.strptime(end_date, "%Y-%m-%d").date() if end_date else date.today()
         if start != date(2026, 1, 1):
@@ -97,6 +106,11 @@ class BackfillOrchestrator:
         if update_db and dry_run:
             raise ValueError("--dry-run and --update-db are mutually exclusive.")
         if update_db:
+            report_progress(
+                phase="VERIFYING_ARTIFACTS",
+                progress_percent=3,
+                detail="Verifying frozen model artifacts and database prerequisites.",
+            )
             logger.info("Verifying packaged runtime artifacts and database prerequisites...")
             self._verify_required_bootstrap_files()
             logger.info("Runtime artifact verification passed.")
@@ -113,6 +127,13 @@ class BackfillOrchestrator:
             availability = self.client.check_availability("all")
             windows = self.build_available_source_windows(start, target, source, availability)
         logger.info("Planned %d audited FIRMS windows.", len(windows))
+        report_progress(
+            phase="PLANNING_WINDOWS",
+            progress_percent=7,
+            total_windows=len(windows),
+            completed_windows=0,
+            detail=f"Planned {len(windows)} audited FIRMS windows through {target}.",
+        )
 
         totals = {"fetched": 0, "unique": 0, "inserted": 0, "revised": 0,
                   "promoted": 0, "alerts": 0}
@@ -134,6 +155,7 @@ class BackfillOrchestrator:
                     model_refresh_start = max(
                         start, baseline.data_through_date + timedelta(days=1)
                     )
+                    report_progress(source_date=model_refresh_start.isoformat())
                     logger.info(
                         "Incremental A/C refresh will cover sites active from %s through %s.",
                         model_refresh_start,
@@ -166,10 +188,28 @@ class BackfillOrchestrator:
                             "records": completed.records_fetched,
                             "status": "ALREADY_COMPLETED",
                         })
+                        report_progress(
+                            phase="SYNCING_FIRMS",
+                            progress_percent=7 + round(63 * index / max(1, len(windows))),
+                            completed_windows=index,
+                            total_windows=len(windows),
+                            records_processed=totals["inserted"],
+                            detail=f"Verified cached FIRMS window {window_start_date} through {window_end}.",
+                        )
                         continue
                 self._require_offline_cache(window_start, day_span, window_source, bbox, dry_run)
                 logger.info("[%d/%d] Fetching %s for %s (%d days).",
                             index, len(windows), window_source, window_start, day_span)
+                report_progress(
+                    phase="SYNCING_FIRMS",
+                    progress_percent=7 + round(63 * (index - 1) / max(1, len(windows))),
+                    completed_windows=index - 1,
+                    total_windows=len(windows),
+                    current_window_start=window_start_date.isoformat(),
+                    current_window_end=window_end.isoformat(),
+                    records_processed=totals["inserted"],
+                    detail=f"Acquiring FIRMS window {window_start_date} through {window_end}.",
+                )
                 rows = self.client.fetch_area_detections(
                     source=window_source, bbox=bbox, day_range=day_span, date=window_start
                 )
@@ -198,15 +238,41 @@ class BackfillOrchestrator:
                     "days": day_span, "records": len(rows),
                     "status": window_result["status"],
                 })
+                report_progress(
+                    phase="SYNCING_FIRMS",
+                    progress_percent=7 + round(63 * index / max(1, len(windows))),
+                    completed_windows=index,
+                    total_windows=len(windows),
+                    current_window_start=window_start_date.isoformat(),
+                    current_window_end=window_end.isoformat(),
+                    records_processed=totals["inserted"],
+                    detail=f"Ingested FIRMS window {window_start_date} through {window_end}.",
+                )
 
             snapshot_status = "DRY_RUN" if dry_run else "FETCH_ONLY"
             snapshot_id = None
             if db is not None:
+                report_progress(
+                    phase="REFRESHING_MODEL_B",
+                    progress_percent=73,
+                    detail=f"Refreshing deterministic temporal states through {target}.",
+                )
                 logger.info("Refreshing deterministic Model B through %s...", target)
                 run_global_daily_model_b_refresh(db, target)
+                report_progress(
+                    phase="MATERIALIZING_MODELS",
+                    progress_percent=78,
+                    processed_sites=0,
+                    detail="Materializing Model A identity and Model C anomaly results.",
+                )
                 logger.info("Refreshing Model A/C for sites changed since %s...", model_refresh_start)
                 degraded_a = self._refresh_2026_stack(
-                    db, model_refresh_start, target, source
+                    db, model_refresh_start, target, source, progress_callback=report_progress
+                )
+                report_progress(
+                    phase="VERIFYING_COVERAGE",
+                    progress_percent=95,
+                    detail=f"Verifying contiguous audited FIRMS coverage through {target}.",
                 )
                 logger.info("Verifying audited FIRMS date coverage through %s...", target)
                 self._verify_database_coverage(db, start, target, source, bbox)
@@ -216,11 +282,21 @@ class BackfillOrchestrator:
                         "sites; CURRENT snapshot was not published."
                     )
                 logger.info("Publishing atomic CURRENT A/B/C snapshot through %s...", target)
+                report_progress(
+                    phase="PUBLISHING_SNAPSHOT",
+                    progress_percent=98,
+                    detail="Publishing the atomic CURRENT A/B/C operational snapshot.",
+                )
                 snapshot = self._publish_snapshot(db, target, source)
                 db.commit()
                 snapshot_id = snapshot.snapshot_id
                 snapshot_status = snapshot.status
                 logger.info("Backfill snapshot published with status %s.", snapshot_status)
+                report_progress(
+                    phase="ACTIVATING_LIVE",
+                    progress_percent=99,
+                    detail="Snapshot published; executing final readiness authorization.",
+                )
         except Exception:
             if db is not None:
                 db.rollback()
@@ -382,7 +458,12 @@ class BackfillOrchestrator:
             cursor = max(row.window_end for row in covering) + timedelta(days=1)
 
     def _refresh_2026_stack(
-        self, db: Session, refresh_start: date, target: date, source: str
+        self,
+        db: Session,
+        refresh_start: date,
+        target: date,
+        source: str,
+        progress_callback: Optional[Callable[..., None]] = None,
     ) -> Dict[str, str]:
         """Materialize A/C only for sites changed since the last published cutoff."""
         accepted_sources = NOAA20_SOURCE_FAMILY if source == DEFAULT_PRIMARY_SOURCE else (source,)
@@ -431,6 +512,14 @@ class BackfillOrchestrator:
             db.commit()
 
         total_sites = len(site_ids)
+        if progress_callback is not None:
+            progress_callback(
+                phase="MATERIALIZING_MODELS",
+                progress_percent=78,
+                processed_sites=0,
+                total_sites=total_sites,
+                detail=f"Materializing Model A/C for {total_sites} affected sites.",
+            )
         logger.info("Incremental Model A/C materialization includes %d sites.", total_sites)
         for index, site_id in enumerate(site_ids, start=1):
             a_result = None
@@ -455,6 +544,14 @@ class BackfillOrchestrator:
             if index % 500 == 0:
                 db.commit()
                 logger.info("Materialized Model A/C for %d/%d sites", index, total_sites)
+            if progress_callback is not None and (index % 250 == 0 or index == total_sites):
+                progress_callback(
+                    phase="MATERIALIZING_MODELS",
+                    progress_percent=78 + round(16 * index / max(1, total_sites)),
+                    processed_sites=index,
+                    total_sites=total_sites,
+                    detail=f"Materialized Model A/C for {index}/{total_sites} affected sites.",
+                )
         db.commit()
         logger.info("Model A/C materialization complete for %d sites.", total_sites)
         return unavailable

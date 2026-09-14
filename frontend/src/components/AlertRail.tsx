@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   ChevronDown,
   ChevronUp,
@@ -26,13 +26,6 @@ export const AlertRail: React.FC<AlertRailProps> = ({
   const [collapsed, setCollapsed] = useState<boolean>(false);
   const [ackingId, setAckingId] = useState<string | null>(null);
 
-  // Auto-collapse AlertRail into compact pill when site drawer opens to prevent blocking the map
-  useEffect(() => {
-    if (hasSelectedSite) {
-      setCollapsed(true);
-    }
-  }, [hasSelectedSite]);
-
   const handleAck = async (alertId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     setAckingId(alertId);
@@ -54,7 +47,7 @@ export const AlertRail: React.FC<AlertRailProps> = ({
     : 'top-14 right-4';
 
   // Compact floating pill when collapsed
-  if (collapsed) {
+  if (collapsed || hasSelectedSite) {
     return (
       <div
         className={`absolute ${positionClass} z-20 transition-all duration-300 pointer-events-auto select-none`}

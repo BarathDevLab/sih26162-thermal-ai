@@ -68,7 +68,7 @@ export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
   }
 
   /* ─── Mini toggle switch ─── */
-  const Toggle = ({ checked, onClick }: { checked: boolean; onClick: () => void }) => (
+  const renderToggle = (checked: boolean, onClick: () => void) => (
     <button
       type="button"
       onClick={onClick}
@@ -80,7 +80,12 @@ export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
   );
 
   /* ─── Section header ─── */
-  const SectionHeader = ({ icon, label, children, open }: { icon: React.ReactNode; label: string; children?: React.ReactNode; open: boolean }) => (
+  const renderSectionHeader = (
+    icon: React.ReactNode,
+    label: string,
+    open: boolean,
+    children?: React.ReactNode
+  ) => (
     <div className="flex items-center justify-between pb-1 border-b border-white/[0.06]">
       <div className="flex items-center gap-2">
         {icon}
@@ -153,13 +158,12 @@ export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
           {/* ── Section 1: 3D Extrusion ── */}
           <div className="hud-card rounded-xl p-2.5 space-y-0">
             <button onClick={() => toggleSection('extrusion')} className="w-full cursor-pointer text-left">
-              <SectionHeader
-                icon={<Zap className="w-3.5 h-3.5 text-[#89E5FC]" />}
-                label="3D EXTRUSION"
-                open={openSections.extrusion}
-              >
+              {renderSectionHeader(
+                <Zap className="w-3.5 h-3.5 text-[#89E5FC]" />,
+                '3D EXTRUSION',
+                openSections.extrusion,
                 <span className="chip chip-cyan">{filters.spikeHeightScale.toFixed(1)}×</span>
-              </SectionHeader>
+              )}
             </button>
 
             {openSections.extrusion && (
@@ -198,7 +202,7 @@ export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
                     </span>
                     <span className="block text-[8px] text-[#475569]">Render FRP columns</span>
                   </div>
-                  <Toggle checked={filters.mode3D} onClick={() => onChange({ ...filters, mode3D: !filters.mode3D })} />
+                  {renderToggle(filters.mode3D, () => onChange({ ...filters, mode3D: !filters.mode3D }))}
                 </div>
               </div>
             )}
@@ -207,13 +211,12 @@ export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
           {/* ── Section 2: Evidence Registries ── */}
           <div className="hud-card rounded-xl p-2.5">
             <button onClick={() => toggleSection('evidence')} className="w-full cursor-pointer text-left">
-              <SectionHeader
-                icon={<Layers className="w-3.5 h-3.5 text-[#89E5FC]" />}
-                label="EVIDENCE REGISTRIES"
-                open={openSections.evidence}
-              >
+              {renderSectionHeader(
+                <Layers className="w-3.5 h-3.5 text-[#89E5FC]" />,
+                'EVIDENCE REGISTRIES',
+                openSections.evidence,
                 <span className="chip">{Object.values(filters.evidenceLayers).filter(Boolean).length} ACTIVE</span>
-              </SectionHeader>
+              )}
             </button>
 
             {openSections.evidence && (
@@ -243,7 +246,7 @@ export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
                       >
                         {ev.label}
                       </span>
-                      <Toggle checked={active} onClick={() => toggleEvidence(ev.key)} />
+                      {renderToggle(active, () => toggleEvidence(ev.key))}
                     </div>
                   );
                 })}
@@ -254,11 +257,11 @@ export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
           {/* ── Section 3: Model A ── */}
           <div className="hud-card rounded-xl p-2.5">
             <button onClick={() => toggleSection('modelA')} className="w-full cursor-pointer text-left">
-              <SectionHeader
-                icon={<ModelAIcon className="w-3.5 h-3.5 text-[#89E5FC]" />}
-                label="MODEL A · IDENTITY"
-                open={openSections.modelA}
-              />
+              {renderSectionHeader(
+                <ModelAIcon className="w-3.5 h-3.5 text-[#89E5FC]" />,
+                'MODEL A · IDENTITY',
+                openSections.modelA
+              )}
             </button>
 
             {openSections.modelA && (
@@ -288,7 +291,7 @@ export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
                       </div>
                       <div className="flex items-center gap-1.5">
                         <span className="chip">{modelACounts[cls.id as keyof typeof modelACounts] ?? 0}</span>
-                        <Toggle checked={active} onClick={() => toggleArrayItem('aClasses', cls.id)} />
+                        {renderToggle(active, () => toggleArrayItem('aClasses', cls.id))}
                       </div>
                     </div>
                   );
@@ -300,11 +303,11 @@ export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
           {/* ── Section 4: Model B ── */}
           <div className="hud-card rounded-xl p-2.5">
             <button onClick={() => toggleSection('modelB')} className="w-full cursor-pointer text-left">
-              <SectionHeader
-                icon={<ModelBIcon className="w-3.5 h-3.5 text-[#89E5FC]" />}
-                label="MODEL B · RECURRENCE"
-                open={openSections.modelB}
-              />
+              {renderSectionHeader(
+                <ModelBIcon className="w-3.5 h-3.5 text-[#89E5FC]" />,
+                'MODEL B · RECURRENCE',
+                openSections.modelB
+              )}
             </button>
 
             {openSections.modelB && (
@@ -334,7 +337,7 @@ export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
                         </div>
                         <div className="text-[8px] text-[#475569]">{state.desc}</div>
                       </div>
-                      <Toggle checked={active} onClick={() => toggleArrayItem('bStates', state.id)} />
+                      {renderToggle(active, () => toggleArrayItem('bStates', state.id))}
                     </div>
                   );
                 })}
@@ -345,11 +348,11 @@ export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
           {/* ── Section 5: Model C ── */}
           <div className="hud-card rounded-xl p-2.5">
             <button onClick={() => toggleSection('modelC')} className="w-full cursor-pointer text-left">
-              <SectionHeader
-                icon={<ModelCIcon className="w-3.5 h-3.5 text-[#89E5FC]" />}
-                label="MODEL C · ANOMALY"
-                open={openSections.modelC}
-              />
+              {renderSectionHeader(
+                <ModelCIcon className="w-3.5 h-3.5 text-[#89E5FC]" />,
+                'MODEL C · ANOMALY',
+                openSections.modelC
+              )}
             </button>
 
             {openSections.modelC && (
@@ -386,10 +389,7 @@ export const SidebarFilters: React.FC<SidebarFiltersProps> = ({
                         </div>
                         <div className="text-[8px] text-[#475569]">{c.desc}</div>
                       </div>
-                      <Toggle
-                        checked={active}
-                        onClick={() => toggleArrayItem('cStatuses', c.id)}
-                      />
+                      {renderToggle(active, () => toggleArrayItem('cStatuses', c.id))}
                     </div>
                   );
                 })}

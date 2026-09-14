@@ -395,5 +395,252 @@ input[type="range"].tactical-slider::-moz-range-thumb {
   border-left-color: rgba(7, 14, 30, 0.88) !important;
 }
 
+/* Initial command-center boot overlay. It remains lightweight: CSS-only
+   animation, no canvas, images, or additional network requests. */
+.system-loading-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  color: #e2e8f0;
+  background:
+    radial-gradient(circle at 50% 44%, rgba(14, 165, 233, 0.14), transparent 34%),
+    #02050c;
+}
+
+.system-loading-grid {
+  position: absolute;
+  inset: -40%;
+  opacity: 0.22;
+  background-image:
+    linear-gradient(rgba(56, 189, 248, 0.12) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(56, 189, 248, 0.12) 1px, transparent 1px);
+  background-size: 44px 44px;
+  transform: perspective(520px) rotateX(58deg) translateY(23%);
+  transform-origin: center;
+}
+
+.system-loading-scanline {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    transparent 46%,
+    rgba(103, 232, 249, 0.08) 50%,
+    transparent 54%,
+    transparent 100%
+  );
+  animation: system-loading-scan 2.8s linear infinite;
+  pointer-events: none;
+}
+
+.system-loading-panel {
+  position: relative;
+  width: min(430px, calc(100vw - 32px));
+  padding: 28px;
+  text-align: center;
+  border: 1px solid rgba(103, 232, 249, 0.24);
+  border-radius: 14px;
+  background: rgba(5, 12, 25, 0.9);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.62), 0 0 36px rgba(14, 165, 233, 0.08);
+  backdrop-filter: blur(18px);
+}
+
+.system-loading-emblem {
+  display: grid;
+  width: 54px;
+  height: 54px;
+  margin: 0 auto 16px;
+  place-items: center;
+  color: #67e8f9;
+  border: 1px solid rgba(103, 232, 249, 0.42);
+  border-radius: 50%;
+  background: rgba(8, 47, 73, 0.34);
+  box-shadow: inset 0 0 18px rgba(34, 211, 238, 0.1), 0 0 24px rgba(34, 211, 238, 0.12);
+  animation: system-loading-pulse 1.8s ease-in-out infinite;
+}
+
+.system-loading-kicker,
+.system-loading-progress-labels,
+.system-loading-stages {
+  font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+}
+
+.system-loading-kicker {
+  margin: 0 0 7px;
+  color: #67e8f9;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.19em;
+}
+
+.system-loading-panel h1 {
+  margin: 0;
+  color: #f8fafc;
+  font-size: clamp(17px, 4vw, 22px);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.system-loading-copy {
+  max-width: 350px;
+  margin: 10px auto 20px;
+  color: #94a3b8;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.system-loading-progress {
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.14);
+}
+
+.system-loading-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #0284c7, #67e8f9);
+  box-shadow: 0 0 12px rgba(103, 232, 249, 0.55);
+  transition: width 280ms ease;
+}
+
+.system-loading-progress-labels {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 7px;
+  color: #64748b;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+}
+
+.system-loading-progress-labels strong {
+  color: #67e8f9;
+}
+
+.system-loading-stages {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 7px;
+  margin-top: 20px;
+}
+
+.system-loading-stages > div {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 5px;
+  padding: 8px;
+  color: #64748b;
+  text-align: left;
+  border: 1px solid rgba(100, 116, 139, 0.2);
+  border-radius: 7px;
+  background: rgba(15, 23, 42, 0.46);
+}
+
+.system-loading-stages span {
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.system-loading-stages b {
+  grid-column: 1 / -1;
+  color: #475569;
+  font-size: 8px;
+  letter-spacing: 0.14em;
+}
+
+.system-loading-stages > div.is-ready {
+  color: #67e8f9;
+  border-color: rgba(34, 211, 238, 0.3);
+  background: rgba(8, 47, 73, 0.3);
+}
+
+.system-loading-stages > div.is-ready b {
+  color: #34d399;
+}
+
+.system-loading-stages > div.is-active {
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.38);
+  background: rgba(69, 42, 6, 0.3);
+  box-shadow: inset 0 0 14px rgba(251, 191, 36, 0.05);
+}
+
+.system-loading-stages > div.is-active b {
+  color: #fbbf24;
+  animation: system-loading-status-pulse 1.2s ease-in-out infinite;
+}
+
+.system-loading-mission-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 17px;
+  font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  text-align: left;
+}
+
+.system-loading-mission-grid > div {
+  min-width: 0;
+  padding: 8px 9px;
+  border-left: 2px solid rgba(56, 189, 248, 0.45);
+  background: rgba(15, 23, 42, 0.55);
+}
+
+.system-loading-mission-grid span,
+.system-loading-mission-grid b {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.system-loading-mission-grid span {
+  margin-bottom: 3px;
+  color: #64748b;
+  font-size: 8px;
+  letter-spacing: 0.12em;
+}
+
+.system-loading-mission-grid b {
+  color: #cbd5e1;
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.system-loading-mission-stages {
+  grid-template-columns: repeat(2, 1fr);
+  margin-top: 9px;
+}
+
+@keyframes system-loading-scan {
+  from { transform: translateY(-55%); }
+  to { transform: translateY(55%); }
+}
+
+@keyframes system-loading-pulse {
+  0%, 100% { transform: scale(0.96); opacity: 0.78; }
+  50% { transform: scale(1); opacity: 1; }
+}
+
+@keyframes system-loading-status-pulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .system-loading-scanline,
+  .system-loading-emblem,
+  .system-loading-stages > div.is-active b {
+    animation: none;
+  }
+}
+
 
 

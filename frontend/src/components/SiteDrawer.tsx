@@ -1,12 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import {
   X,
-  Layers,
   Satellite,
-  Table,
   ExternalLink,
-  MapPin,
-  Eye,
   Sparkles,
   ShieldCheck,
   Hexagon,

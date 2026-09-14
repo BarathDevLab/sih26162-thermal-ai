@@ -5,6 +5,7 @@
 
 import type {
   HealthCheck,
+  LiveRuntimeStatus,
   SystemStats,
   SiteGeoJSONFeatureCollection,
   SiteDetail,
@@ -42,6 +43,11 @@ export async function fetchHealth(): Promise<HealthCheck> {
 export async function fetchStats(): Promise<SystemStats> {
   const res = await fetch(`${API_BASE}/stats`);
   return handleResponse<SystemStats>(res);
+}
+
+export async function fetchLiveStatus(): Promise<LiveRuntimeStatus> {
+  const res = await fetch(`${API_BASE}/live/status`, { cache: 'no-store' });
+  return handleResponse<LiveRuntimeStatus>(res);
 }
 
 export interface BBoxSiteFilters {

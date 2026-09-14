@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import maplibregl, { Map as MapLibreMap, Popup } from 'maplibre-gl';
 import { MapboxOverlay } from '@deck.gl/mapbox';
 import { ColumnLayer } from '@deck.gl/layers';
@@ -20,6 +20,8 @@ interface MapContainerProps {
   showSatellites?: boolean;
   showSwaths?: boolean;
   showHeatBloom?: boolean;
+  onMapReady?: () => void;
+  onSitesRendered?: () => void;
 }
 
 function isSiteVisible(feature: SiteGeoJSONFeature, filters: FilterState): boolean {
@@ -233,7 +235,9 @@ export const MapContainer: React.FC<MapContainerProps> = ({
   show3DColumns = true,
   showSatellites = true,
   showSwaths = true,
-  showHeatBloom = true
+  showHeatBloom = true,
+  onMapReady,
+  onSitesRendered
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
@@ -241,9 +245,13 @@ export const MapContainer: React.FC<MapContainerProps> = ({
   const popupRef = useRef<Popup | null>(null);
 
   const [viewZoom, setViewZoom] = useState<number>(is3D ? 2.5 : 4.8);
+  const [styleRevision, setStyleRevision] = useState(0);
 
   const onSelectSiteRef = useRef(onSelectSite);
   const onBoundsChangeRef = useRef(onBoundsChange);
+  const onMapReadyRef = useRef(onMapReady);
+  const onSitesRenderedRef = useRef(onSitesRendered);
+  const selectedSiteIdRef = useRef(selectedSiteId);
 
   useEffect(() => {
     onSelectSiteRef.current = onSelectSite;
@@ -252,6 +260,23 @@ export const MapContainer: React.FC<MapContainerProps> = ({
   useEffect(() => {
     onBoundsChangeRef.current = onBoundsChange;
   }, [onBoundsChange]);
+
+  useEffect(() => {
+    onMapReadyRef.current = onMapReady;
+  }, [onMapReady]);
+
+  useEffect(() => {
+    onSitesRenderedRef.current = onSitesRendered;
+  }, [onSitesRendered]);
+
+  useEffect(() => {
+    selectedSiteIdRef.current = selectedSiteId;
+  }, [selectedSiteId]);
+
+  const filteredFeatures = useMemo<SiteGeoJSONFeature[]>(
+    () => (sitesData?.features ?? []).filter(feature => isSiteVisible(feature, filters)),
+    [sitesData, filters]
+  );
 
   const lastFlownCoordsRef = useRef<[number, number] | null>(null);
 
@@ -727,7 +752,7 @@ export const MapContainer: React.FC<MapContainerProps> = ({
     }
   };
 
-  const initialSetupLayersRef = useRef(setupLayers);
+  const setupLayersRef = useRef(setupLayers);
   const initialIs3DRef = useRef(is3D);
   const initialBasemapRef = useRef(basemapMode);
   const is3DRef = useRef(is3D);
@@ -771,7 +796,9 @@ export const MapContainer: React.FC<MapContainerProps> = ({
         });
       }
 
-      initialSetupLayersRef.current(map);
+      setupLayersRef.current(map);
+      setStyleRevision(revision => revision + 1);
+      onMapReadyRef.current?.();
 
       try {
         const deckOverlay = new MapboxOverlay({
@@ -945,7 +972,7 @@ export const MapContainer: React.FC<MapContainerProps> = ({
             ? `${rawId.slice(0, 15)}...${rawId.slice(-5)}`
             : rawId;
 
-          if (p?.site_id && p.site_id === selectedSiteId) return;
+          if (p?.site_id && p.site_id === selectedSiteIdRef.current) return;
 
           const html = `
             <div style="font-family: 'JetBrains Mono', monospace; font-size: 10px; line-height: 1.4; min-width: 170px; max-width: 270px; color: #e2e8f0;">
@@ -1155,7 +1182,8 @@ export const MapContainer: React.FC<MapContainerProps> = ({
     map.setStyle(newStyle);
 
     map.once('style.load', () => {
-      setupLayers(map);
+      setupLayersRef.current(map);
+      setStyleRevision(revision => revision + 1);
       try {
         if (typeof (map as any).setProjection === 'function') {
           (map as any).setProjection({ type: is3D ? 'globe' : 'mercator' });
@@ -1183,39 +1211,8 @@ export const MapContainer: React.FC<MapContainerProps> = ({
         });
       }
 
-      if (sitesData) {
-        const filteredFeatures = sitesData.features.filter(
-          feature => isSiteVisible(feature, filters)
-        );
-        const source = map.getSource('sites-geojson') as maplibregl.GeoJSONSource | undefined;
-        if (source && typeof source.setData === 'function') {
-          source.setData({
-            type: 'FeatureCollection',
-            features: filteredFeatures
-          });
-        }
-      }
-
-      const satLayerIds = ['satellites-layer', 'satellites-primary-halo', 'satellites-primary-core', 'satellites-primary-label'];
-      satLayerIds.forEach(id => {
-        if (map.getLayer(id)) {
-          map.setLayoutProperty(id, 'visibility', showSatellites ? 'visible' : 'none');
-        }
-      });
-      if (map.getLayer('satellite-orbit-lines')) {
-        map.setLayoutProperty('satellite-orbit-lines', 'visibility', showSatellites ? 'visible' : 'none');
-      }
-      if (map.getLayer('satellite-swaths-fill')) {
-        map.setLayoutProperty('satellite-swaths-fill', 'visibility', showSwaths ? 'visible' : 'none');
-      }
-      if (map.getLayer('satellite-swaths-line')) {
-        map.setLayoutProperty('satellite-swaths-line', 'visibility', showSwaths ? 'visible' : 'none');
-      }
-      if (map.getLayer('thermal-heat-bloom')) {
-        map.setLayoutProperty('thermal-heat-bloom', 'visibility', showHeatBloom ? 'visible' : 'none');
-      }
     });
-  }, [basemapMode, is3D, sitesData, filters, showSatellites, showSwaths, showHeatBloom]);
+  }, [basemapMode, is3D]);
 
   // 4. Focus coordinates when explicitly requested (e.g. "Locate" button in Alert Rail)
   useEffect(() => {
@@ -1238,25 +1235,42 @@ export const MapContainer: React.FC<MapContainerProps> = ({
     }
   }, [focusedCoordinates, is3D]);
 
-  // 5. Update GeoJSON Source & deck.gl 3D Volumetric Thermal Columns
+  // 5. Push site data to MapLibre exactly once per payload/filter/style change.
+  // MapLibre clusters GeoJSON in a worker; report completion only after the map
+  // reaches idle so the startup overlay reflects visible clusters, not HTTP time.
   useEffect(() => {
     const map = mapRef.current;
-    const deck = deckOverlayRef.current;
     if (!map || !sitesData) return;
-
-    const filteredFeatures: SiteGeoJSONFeature[] = sitesData.features.filter(
-      feature => isSiteVisible(feature, filters)
-    );
 
     const source = map.getSource('sites-geojson') as maplibregl.GeoJSONSource | undefined;
     if (source && typeof source.setData === 'function') {
+      let completed = false;
+      const reportRendered = () => {
+        if (completed) return;
+        completed = true;
+        window.clearTimeout(fallbackTimer);
+        onSitesRenderedRef.current?.();
+      };
+      const fallbackTimer = window.setTimeout(reportRendered, 1_500);
+      map.once('idle', reportRendered);
       source.setData({
         type: 'FeatureCollection',
         features: filteredFeatures
       });
-    }
 
-    // Toggle satellite layer visibility
+      return () => {
+        completed = true;
+        window.clearTimeout(fallbackTimer);
+        map.off('idle', reportRendered);
+      };
+    }
+  }, [sitesData, filteredFeatures, styleRevision]);
+
+  // 6. Visibility changes are cheap layout operations and must not rebuild the
+  // site cluster index or the deck.gl layer.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
     const satAllLayers = ['satellites-layer', 'satellites-primary-halo', 'satellites-primary-core', 'satellites-primary-label'];
     satAllLayers.forEach(id => {
       if (map.getLayer(id)) {
@@ -1279,8 +1293,14 @@ export const MapContainer: React.FC<MapContainerProps> = ({
     if (map.getLayer('thermal-heat-bloom')) {
       map.setLayoutProperty('thermal-heat-bloom', 'visibility', showHeatBloom ? 'visible' : 'none');
     }
+  }, [showSatellites, showSwaths, showHeatBloom, styleRevision]);
 
-    // Update 3D Deck.gl Volumetric Columns (Thermal FRP Plumes)
+  // 7. Update deck.gl only when 3D column inputs change.
+  useEffect(() => {
+    const map = mapRef.current;
+    const deck = deckOverlayRef.current;
+    if (!map || !deck) return;
+
     if (deck) {
       try {
         if (is3D && show3DColumns && filteredFeatures.length > 0) {
@@ -1341,12 +1361,9 @@ export const MapContainer: React.FC<MapContainerProps> = ({
         console.warn('Deck.gl layer update error:', deckUpdateErr);
       }
     }
-  }, [sitesData, filters, is3D, selectedSiteId, showSatellites, showHeatBloom, showSwaths, show3DColumns, viewZoom]);
+  }, [filteredFeatures, is3D, show3DColumns, viewZoom, filters.spikeHeightScale]);
 
-  const visibleSiteCount = sitesData?.features.reduce(
-    (count, feature) => count + (isSiteVisible(feature, filters) ? 1 : 0),
-    0
-  ) ?? 0;
+  const visibleSiteCount = filteredFeatures.length;
 
   return (
     <div className="relative w-full h-full flex-1 bg-[#02040a] overflow-hidden">

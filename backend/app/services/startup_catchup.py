@@ -21,7 +21,17 @@ _task: Optional[asyncio.Task] = None
 _status: Dict[str, Any] = {
     "status": "IDLE",
     "running": False,
+    "phase": "IDLE",
+    "progress_percent": 0,
+    "source_date": None,
     "target_date": None,
+    "completed_windows": 0,
+    "total_windows": 0,
+    "current_window_start": None,
+    "current_window_end": None,
+    "records_processed": 0,
+    "processed_sites": 0,
+    "total_sites": 0,
     "started_at": None,
     "ended_at": None,
     "detail": "No startup catch-up has been requested.",
@@ -53,7 +63,17 @@ async def _catch_up_and_activate(app) -> None:
     _status.update({
         "status": "RUNNING",
         "running": True,
+        "phase": "ACQUIRING_LOCK",
+        "progress_percent": 1,
+        "source_date": "2026-01-01",
         "target_date": target.isoformat(),
+        "completed_windows": 0,
+        "total_windows": 0,
+        "current_window_start": None,
+        "current_window_end": None,
+        "records_processed": 0,
+        "processed_sites": 0,
+        "total_sites": 0,
         "started_at": datetime.now(timezone.utc).isoformat(),
         "ended_at": None,
         "detail": "Catching up FIRMS and publishing the current A/B/C snapshot.",
@@ -63,11 +83,14 @@ async def _catch_up_and_activate(app) -> None:
         target,
     )
     try:
-        result = await asyncio.to_thread(_run_locked_catchup, target)
+        result = await asyncio.to_thread(
+            _run_locked_catchup, target, _update_catchup_progress
+        )
         if result.get("status") == "SKIPPED_ALREADY_RUNNING":
             _status.update({
                 "status": "SKIPPED_ALREADY_RUNNING",
                 "running": False,
+                "phase": "LOCKED_BY_PEER",
                 "ended_at": datetime.now(timezone.utc).isoformat(),
                 "detail": "Another backend process owns the database catch-up lock.",
             })
@@ -86,6 +109,8 @@ async def _catch_up_and_activate(app) -> None:
             _status.update({
                 "status": "COMPLETED",
                 "running": False,
+                "phase": "LIVE_ACTIVATED",
+                "progress_percent": 100,
                 "ended_at": datetime.now(timezone.utc).isoformat(),
                 "detail": (
                     f"Catch-up published {result.get('snapshot_status')} through {target}; "
@@ -97,6 +122,7 @@ async def _catch_up_and_activate(app) -> None:
             _status.update({
                 "status": "COMPLETED_NOT_READY",
                 "running": False,
+                "phase": "READINESS_BLOCKED",
                 "ended_at": datetime.now(timezone.utc).isoformat(),
                 "detail": f"Catch-up completed but readiness is {readiness.status}: {readiness.detail}",
             })
@@ -106,13 +132,19 @@ async def _catch_up_and_activate(app) -> None:
         _status.update({
             "status": "FAILED",
             "running": False,
+            "phase": "FAILED",
             "ended_at": datetime.now(timezone.utc).isoformat(),
             "detail": detail,
         })
         logger.error("Automatic startup catch-up failed: %s", detail)
 
 
-def _run_locked_catchup(target: date) -> Dict[str, Any]:
+def _update_catchup_progress(payload: Dict[str, Any]) -> None:
+    """Receive thread-safe primitive progress fields from the backfill worker."""
+    _status.update(payload)
+
+
+def _run_locked_catchup(target: date, progress_callback=None) -> Dict[str, Any]:
     """Run catch-up under a session-level PostgreSQL advisory lock."""
     lock_db = SessionLocal()
     acquired = True
@@ -131,6 +163,7 @@ def _run_locked_catchup(target: date) -> Dict[str, Any]:
             start_date="2026-01-01",
             end_date=target.isoformat(),
             update_db=True,
+            progress_callback=progress_callback,
         )
     finally:
         if is_postgres and acquired:

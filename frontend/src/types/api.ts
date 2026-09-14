@@ -11,6 +11,31 @@ export interface HealthCheck {
   timestamp: string;
 }
 
+export interface StartupCatchupStatus {
+  status: 'IDLE' | 'RUNNING' | 'SKIPPED_ALREADY_RUNNING' | 'COMPLETED' | 'COMPLETED_NOT_READY' | 'FAILED';
+  running: boolean;
+  phase: string;
+  progress_percent: number;
+  source_date: string | null;
+  target_date: string | null;
+  completed_windows: number;
+  total_windows: number;
+  current_window_start: string | null;
+  current_window_end: string | null;
+  records_processed: number;
+  processed_sites: number;
+  total_sites: number;
+  started_at: string | null;
+  ended_at: string | null;
+  detail: string;
+}
+
+export interface LiveRuntimeStatus {
+  scheduler: Record<string, unknown>;
+  prithvi_queue: Record<string, unknown>;
+  startup_catchup: StartupCatchupStatus;
+}
+
 export interface SystemStats {
   total_sites: number;
   active_sites_30d: number;
