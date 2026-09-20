@@ -4,6 +4,8 @@ Provides real-time telemetry, manual triggers, and interactive hotspot injection
 for demonstration and continuous operations.
 """
 
+import asyncio
+import json
 import uuid
 import os
 import logging
@@ -11,6 +13,7 @@ from datetime import date, datetime, timezone
 from typing import Dict, Any, Optional
 from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from backend.app.db.session import get_db
@@ -21,6 +24,7 @@ from backend.app.services.scheduler import (
 )
 from backend.app.services.live_pipeline import get_live_pipeline_service
 from backend.app.services.startup_catchup import get_startup_catchup_status
+from backend.app.services.stack_readiness import get_last_readiness_report
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +53,50 @@ def get_status():
     """
     status = get_scheduler_status()
     status["startup_catchup"] = get_startup_catchup_status()
+    status["runtime_readiness"] = get_last_readiness_report().to_dict()
     return status
+
+
+@router.get(
+    "/live/startup-stream",
+    summary="Stream startup catch-up and runtime readiness telemetry",
+)
+async def stream_startup_status():
+    """Keep one SSE connection open instead of polling status during startup."""
+    async def event_stream():
+        last_signature = None
+        ticks_since_emit = 0
+        try:
+            while True:
+                catchup = get_startup_catchup_status()
+                readiness = get_last_readiness_report().to_dict()
+                signature = (
+                    catchup.get("updated_at"),
+                    catchup.get("status"),
+                    readiness.get("status"),
+                )
+                ticks_since_emit += 1
+                if signature != last_signature or ticks_since_emit >= 5:
+                    payload = {
+                        "startup_catchup": catchup,
+                        "runtime_readiness": readiness,
+                    }
+                    yield f"data: {json.dumps(payload, separators=(',', ':'))}\n\n"
+                    last_signature = signature
+                    ticks_since_emit = 0
+                await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            return
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post(

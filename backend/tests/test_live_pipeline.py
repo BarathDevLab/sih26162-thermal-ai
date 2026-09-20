@@ -1,5 +1,7 @@
 """Tests for live status, simulation isolation, and global Model B refresh."""
 
+import asyncio
+import json
 from datetime import date, timedelta
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -12,6 +14,7 @@ from backend.app.db.models import (
     SiteDailyActivity, SiteModelB,
 )
 from backend.app.services.live_pipeline import LivePipelineService, run_global_daily_model_b_refresh
+from backend.app.api.v1.live import stream_startup_status
 
 client = TestClient(app)
 
@@ -23,6 +26,24 @@ def test_live_status_endpoint():
     assert "scheduler" in data
     assert "prithvi_queue" in data
     assert "startup_catchup" in data
+    assert "runtime_readiness" in data
+    assert "status" in data["runtime_readiness"]
+    assert "can_start_live" in data["runtime_readiness"]
+
+
+def test_startup_status_stream_emits_one_combined_runtime_snapshot():
+    async def read_first_event():
+        response = await stream_startup_status()
+        iterator = response.body_iterator.__aiter__()
+        first = await anext(iterator)
+        await iterator.aclose()
+        return first
+
+    event = asyncio.run(read_first_event())
+    line = event.decode() if isinstance(event, bytes) else event
+    payload = json.loads(line.removeprefix("data: ").strip())
+    assert "startup_catchup" in payload
+    assert "runtime_readiness" in payload
 
 
 def test_live_pipeline_simulation_is_disabled_by_default():
@@ -141,6 +162,7 @@ def test_candidate_promotion_persists_all_members_without_fk_failure():
         )
         assert result["promoted_count"] == 1
         promoted = db.query(CandidateSource).filter_by(status="PROMOTED").one()
+        assert result["promoted_site_ids"] == [promoted.promoted_site_id]
         assert promoted.promoted_site_id is not None
         assert db.query(FirmsDetection).filter_by(
             source_site_id=promoted.promoted_site_id
@@ -199,5 +221,57 @@ def test_historical_backfill_can_defer_models_until_final_refresh():
             site_id="SITE_DEFER", acq_date=date(2026, 1, 1)
         ).one().detections == 1
         assert db.query(SiteModelB).count() == 0
+    finally:
+        db.close()
+
+
+def test_noaa20_standard_delivery_does_not_duplicate_existing_nrt_observation():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine)()
+    service = LivePipelineService()
+    try:
+        db.add(SourceSite(site_id="SITE_CANONICAL", latitude=20.0, longitude=75.0))
+        db.add(FirmsDetection(
+            detection_id=service.ingestion.generate_detection_id(
+                "VIIRS_NOAA20_NRT", "20", 20.0, 75.0, "2026-06-01", "0830"
+            ),
+            source_sensor="VIIRS_NOAA20_NRT",
+            satellite="20",
+            instrument="VIIRS",
+            latitude=20.0,
+            longitude=75.0,
+            acq_date=date(2026, 6, 1),
+            acq_time="0830",
+            frp=10.0,
+            confidence="nominal",
+            daynight="D",
+            version="2.0NRT",
+            source_site_id="SITE_CANONICAL",
+            resolution_status="MATCHED",
+        ))
+        db.commit()
+
+        result = service.process_detections_batch(
+            [{
+                "latitude": 20.0,
+                "longitude": 75.0,
+                "acq_date": "2026-06-01",
+                "acq_time": 830,
+                "satellite": "20",
+                "frp": 10.5,
+                "daynight": "D",
+            }],
+            db,
+            source_sensor="VIIRS_NOAA20_SP",
+            as_of_date=date(2026, 6, 1),
+            refresh_models=False,
+        )
+
+        assert result["inserted_count"] == 0
+        assert result["cross_source_duplicate_count"] == 1
+        assert db.query(FirmsDetection).count() == 1
+        assert db.query(FirmsDetection).one().source_sensor == "VIIRS_NOAA20_NRT"
+        assert db.query(SiteDailyActivity).count() == 0
     finally:
         db.close()

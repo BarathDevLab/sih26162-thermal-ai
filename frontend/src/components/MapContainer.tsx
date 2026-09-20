@@ -33,6 +33,14 @@ function isSiteVisible(feature: SiteGeoJSONFeature, filters: FilterState): boole
 }
 
 const MAX_3D_COLUMNS = 2500;
+const MAP_MAX_ZOOM = 20;
+
+// Esri exposes higher tile levels, but detailed imagery coverage is not
+// uniform. Requesting those native levels can return tiles whose image is the
+// provider's "Map data unavailable" notice. Stop native requests at level 18
+// and let MapLibre overzoom that last reliable tile for closer inspection.
+const BASEMAP_NATIVE_MAX_ZOOM = 18;
+const BASEMAP_LAYER_MAX_ZOOM = MAP_MAX_ZOOM + 1;
 
 // 1. Photorealistic Earth Satellite Globe Style (ESRI World Imagery)
 const SATELLITE_GLOBE_STYLE: maplibregl.StyleSpecification = {
@@ -47,6 +55,7 @@ const SATELLITE_GLOBE_STYLE: maplibregl.StyleSpecification = {
         'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
       ],
       tileSize: 256,
+      maxzoom: BASEMAP_NATIVE_MAX_ZOOM,
       attribution: '&copy; Esri, Maxar, Earthstar Geographics'
     },
     'esri-boundaries': {
@@ -54,7 +63,8 @@ const SATELLITE_GLOBE_STYLE: maplibregl.StyleSpecification = {
       tiles: [
         'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}'
       ],
-      tileSize: 256
+      tileSize: 256,
+      maxzoom: BASEMAP_NATIVE_MAX_ZOOM
     }
   },
   layers: [
@@ -63,14 +73,14 @@ const SATELLITE_GLOBE_STYLE: maplibregl.StyleSpecification = {
       type: 'raster',
       source: 'esri-imagery',
       minzoom: 0,
-      maxzoom: 20
+      maxzoom: BASEMAP_LAYER_MAX_ZOOM
     },
     {
       id: 'esri-boundaries-layer',
       type: 'raster',
       source: 'esri-boundaries',
       minzoom: 0,
-      maxzoom: 20,
+      maxzoom: BASEMAP_LAYER_MAX_ZOOM,
       paint: {
         'raster-opacity': 0.65
       }
@@ -91,6 +101,7 @@ const DARK_TACTICAL_STYLE: maplibregl.StyleSpecification = {
         'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}'
       ],
       tileSize: 256,
+      maxzoom: BASEMAP_NATIVE_MAX_ZOOM,
       attribution: '&copy; Esri &copy; OpenStreetMap'
     },
     'esri-labels': {
@@ -98,7 +109,8 @@ const DARK_TACTICAL_STYLE: maplibregl.StyleSpecification = {
       tiles: [
         'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}'
       ],
-      tileSize: 256
+      tileSize: 256,
+      maxzoom: BASEMAP_NATIVE_MAX_ZOOM
     }
   },
   layers: [
@@ -107,14 +119,14 @@ const DARK_TACTICAL_STYLE: maplibregl.StyleSpecification = {
       type: 'raster',
       source: 'esri-dark',
       minzoom: 0,
-      maxzoom: 20
+      maxzoom: BASEMAP_LAYER_MAX_ZOOM
     },
     {
       id: 'esri-labels-layer',
       type: 'raster',
       source: 'esri-labels',
       minzoom: 0,
-      maxzoom: 20
+      maxzoom: BASEMAP_LAYER_MAX_ZOOM
     }
   ]
 };
@@ -773,7 +785,7 @@ export const MapContainer: React.FC<MapContainerProps> = ({
       pitch: initialIs3DRef.current ? 45 : 0,
       bearing: initialIs3DRef.current ? -12 : 0,
       maxPitch: 85,
-      maxZoom: 17,
+      maxZoom: 19,
       attributionControl: false,
       renderWorldCopies: initialIs3DRef.current ? true : false
     });

@@ -43,6 +43,28 @@ const BACKEND_STAGES = [
 
 const EXIT_TRANSITION_MS = 900;
 
+function formatDuration(seconds: number | null | undefined, fallback = 'CALCULATING') {
+  if (seconds === null || seconds === undefined) return fallback;
+  const total = Math.max(0, Math.round(seconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  if (hours > 0) return `${hours}H ${String(minutes).padStart(2, '0')}M`;
+  if (minutes > 0) return `${minutes}M ${String(secs).padStart(2, '0')}S`;
+  return `${secs}S`;
+}
+
+function formatLogTime(timestamp: string) {
+  const value = new Date(timestamp);
+  if (Number.isNaN(value.getTime())) return '--:--:--';
+  return value.toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  });
+}
+
 export function SystemLoadingScreen({
   visible,
   mapReady,
@@ -55,12 +77,20 @@ export function SystemLoadingScreen({
   retryDelayMs
 }: SystemLoadingScreenProps) {
   const [mounted, setMounted] = useState(visible);
+  const [mountedAt] = useState(() => Date.now());
+  const [clockNow, setClockNow] = useState(() => Date.now());
 
   useEffect(() => {
     if (visible || !mounted) return;
     const exitTimer = window.setTimeout(() => setMounted(false), EXIT_TRANSITION_MS);
     return () => window.clearTimeout(exitTimer);
   }, [mounted, visible]);
+
+  useEffect(() => {
+    if (!mounted) return;
+    const clock = window.setInterval(() => setClockNow(Date.now()), 1_000);
+    return () => window.clearInterval(clock);
+  }, [mounted]);
 
   if (!mounted) return null;
 
@@ -123,6 +153,17 @@ export function SystemLoadingScreen({
   const progressStyle = {
     '--mission-progress': `${progress * 3.6}deg`
   } as CSSProperties;
+  const activityLog = catchup?.activity_log?.slice(-7) ?? [];
+  const localElapsedSeconds = Math.max(0, Math.round((clockNow - mountedAt) / 1_000));
+  const elapsed = formatDuration(
+    catchup?.started_at ? catchup.elapsed_seconds : localElapsedSeconds,
+    '0S'
+  );
+  const eta = catchup?.running
+    ? catchup.estimated_remaining_seconds == null
+      ? 'CALCULATING'
+      : `~${formatDuration(catchup.estimated_remaining_seconds)}`
+    : catchup?.status === 'COMPLETED' ? 'COMPLETE' : 'PENDING';
 
   return (
     <div
@@ -143,6 +184,8 @@ export function SystemLoadingScreen({
         </div>
         <div className="mission-loader-telemetry">
           <span>TARGET DATE <b>{target}</b></span>
+          <span>ELAPSED <b>{elapsed}</b></span>
+          <span>ETA <b>{eta}</b></span>
           <span>{missionActive ? 'FIRMS WINDOWS' : 'LINK ATTEMPT'} <b>{missionActive ? `${catchup?.completed_windows ?? 0}/${catchup?.total_windows ?? 0}` : connectionAttempt}</b></span>
           <span>DB INSERTED <b>{(catchup?.records_processed ?? 0).toLocaleString()}</b></span>
         </div>
@@ -228,6 +271,35 @@ export function SystemLoadingScreen({
             </div>
           );
         })}
+      </aside>
+
+      <aside className="mission-activity-log" aria-label="Live startup activity">
+        <div className="mission-activity-heading">
+          <span>MISSION ACTIVITY</span>
+          <b>{catchup?.running ? 'LIVE' : backendReady ? 'LINKED' : 'WAITING'}</b>
+        </div>
+        <div className="mission-activity-timing">
+          <span>ELAPSED <b>{elapsed}</b></span>
+          <span>EST. REMAINING <b>{eta}</b></span>
+          {catchup?.progress_rate_percent_per_minute != null && (
+            <span>RATE <b>{catchup.progress_rate_percent_per_minute.toFixed(2)}%/MIN</b></span>
+          )}
+        </div>
+        <div className="mission-activity-events">
+          {activityLog.length > 0 ? activityLog.map((event, index) => (
+            <div className={`is-${event.level.toLowerCase()}`} key={`${event.timestamp}-${index}`}>
+              <time>{formatLogTime(event.timestamp)}</time>
+              <span>{event.phase.replaceAll('_', ' ')}</span>
+              <p>{event.message}</p>
+            </div>
+          )) : (
+            <div className="is-info">
+              <time>--:--:--</time>
+              <span>RUNTIME LINK</span>
+              <p>{connectionDetail ?? 'Waiting for backend startup telemetry.'}</p>
+            </div>
+          )}
+        </div>
       </aside>
 
       <section className="mission-loader-footer">

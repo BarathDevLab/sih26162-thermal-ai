@@ -5,12 +5,12 @@ Verifies 5-day window partitioning, bootstrap data loading, and end-to-end backf
 
 import os
 import tempfile
-from datetime import date
+from datetime import date, datetime, timezone
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from backend.app.db.models import FirmsDetection, SiteModelB, SourceSite
+from backend.app.db.models import FirmsBackfillWindow, FirmsDetection, SiteModelB, SourceSite
 from backend.app.db.session import Base
 from backend.app.services.backfill_firms_2026 import BackfillOrchestrator
 from backend.app.services.firms_client import DEFAULT_PRIMARY_SOURCE, FirmsClient
@@ -57,6 +57,37 @@ def test_available_windows_reject_gap_in_source_family():
         BackfillOrchestrator.build_available_source_windows(
             date(2026, 1, 1), date(2026, 9, 8), "VIIRS_NOAA20_NRT", availability
         )
+
+
+def test_completed_nrt_window_covers_same_standard_delivery_window():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine)()
+    try:
+        db.add(FirmsBackfillWindow(
+            source_sensor="VIIRS_NOAA20_NRT",
+            bbox="67,6,98,38",
+            window_start=date(2026, 6, 1),
+            window_end=date(2026, 6, 5),
+            records_fetched=10,
+            payload_sha256="0" * 64,
+            fetch_mode="API",
+            status="COMPLETED",
+            completed_at=datetime.now(timezone.utc),
+        ))
+        db.commit()
+
+        covered = BackfillOrchestrator._completed_covering_window(
+            db,
+            "VIIRS_NOAA20_SP",
+            "67,6,98,38",
+            date(2026, 6, 1),
+            date(2026, 6, 5),
+        )
+        assert covered is not None
+        assert covered.source_sensor == "VIIRS_NOAA20_NRT"
+    finally:
+        db.close()
 
 
 def test_backfill_dry_run_offline():

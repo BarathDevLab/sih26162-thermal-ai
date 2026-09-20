@@ -28,7 +28,8 @@ from backend.app.db.models import (
 from backend.app.engines.decision_engine import DecisionEngine
 from backend.app.engines.model_b import ModelBEngine
 from backend.app.engines.source_resolver import SourceResolver
-from backend.app.services.firms_ingestion import FirmsIngestionService
+from backend.app.services.firms_client import NOAA20_SOURCE_FAMILY
+from backend.app.services.firms_ingestion import FirmsIngestionService, normalize_acq_time
 from backend.app.services.model_a_service import ModelAInputUnavailable, ModelAService
 from backend.app.services.model_c_replay_service import ModelCReplayService
 from backend.app.services.prithvi_queue import enqueue_site_for_prithvi
@@ -146,15 +147,28 @@ class LivePipelineService:
                 .filter(FirmsDetection.detection_id.in_(normalized))
                 .all()
             }
+            family_existing = self._existing_family_observations(
+                db, normalized, source_sensor
+            )
             touched_days: Set[Tuple[str, date]] = set()
             promoted_sites: List[str] = []
             inserted = 0
             revised = 0
             unchanged = 0
+            cross_source_duplicates = 0
 
             self.resolver.begin_batch()
             for detection_id, payload in normalized.items():
                 row = existing.get(detection_id)
+                family_row = family_existing.get(self._physical_observation_key(payload))
+                if (
+                    row is None
+                    and family_row is not None
+                    and family_row.detection_id != detection_id
+                ):
+                    unchanged += 1
+                    cross_source_duplicates += 1
+                    continue
                 if row is not None and not self._changed(row, payload):
                     unchanged += 1
                     continue
@@ -217,7 +231,9 @@ class LivePipelineService:
                     "inserted_count": inserted,
                     "revised_count": revised,
                     "unchanged_count": unchanged,
+                    "cross_source_duplicate_count": cross_source_duplicates,
                     "promoted_count": len(promoted_sites),
+                    "promoted_site_ids": sorted(set(promoted_sites)),
                     "touched_sites_count": len(touched_sites),
                     "touched_site_ids": sorted(touched_sites),
                     "alerts_generated": 0,
@@ -270,7 +286,9 @@ class LivePipelineService:
                 "inserted_count": inserted,
                 "revised_count": revised,
                 "unchanged_count": unchanged,
+                "cross_source_duplicate_count": cross_source_duplicates,
                 "promoted_count": len(promoted_sites),
+                "promoted_site_ids": sorted(set(promoted_sites)),
                 "touched_sites_count": len(touched_sites),
                 "alerts_generated": alerts_generated,
                 "model_a_unavailable": model_a_errors,
@@ -297,6 +315,45 @@ class LivePipelineService:
             payload = self.ingestion.normalize_record(raw, source_sensor=source_sensor)
             normalized[payload["detection_id"]] = payload
         return normalized
+
+    @staticmethod
+    def _physical_observation_key(payload: Any) -> Tuple[str, str, str, str, str]:
+        observed_date = payload.acq_date if isinstance(payload, FirmsDetection) else payload["acq_date"]
+        date_text = observed_date.isoformat() if isinstance(observed_date, date) else str(observed_date)[:10]
+        value = lambda name: getattr(payload, name) if isinstance(payload, FirmsDetection) else payload[name]
+        return (
+            str(value("satellite")).strip(),
+            f"{round(float(value('latitude')), 4):.4f}",
+            f"{round(float(value('longitude')), 4):.4f}",
+            date_text,
+            normalize_acq_time(value("acq_time")),
+        )
+
+    def _existing_family_observations(
+        self,
+        db: Session,
+        normalized: Dict[str, dict],
+        source_sensor: str,
+    ) -> Dict[Tuple[str, str, str, str, str], FirmsDetection]:
+        if source_sensor not in NOAA20_SOURCE_FAMILY or not normalized:
+            return {}
+        observed_dates = {
+            datetime.strptime(str(payload["acq_date"])[:10], "%Y-%m-%d").date()
+            for payload in normalized.values()
+        }
+        rows = (
+            db.query(FirmsDetection)
+            .filter(
+                FirmsDetection.source_sensor.in_(NOAA20_SOURCE_FAMILY),
+                FirmsDetection.acq_date.in_(observed_dates),
+            )
+            .all()
+        )
+        result: Dict[Tuple[str, str, str, str, str], FirmsDetection] = {}
+        # Prefer the operational NRT record if legacy data already contain both.
+        for row in sorted(rows, key=lambda item: item.source_sensor != PRIMARY_SENSOR):
+            result.setdefault(self._physical_observation_key(row), row)
+        return result
 
     def _resolve(self, payload: dict, existing: Optional[FirmsDetection]) -> dict:
         if existing is not None and existing.latitude == payload["latitude"] and existing.longitude == payload["longitude"]:
@@ -406,6 +463,13 @@ class LivePipelineService:
         if candidate:
             candidate.status = "PROMOTED"
             candidate.promoted_site_id = site_id
+            candidate.detection_count = int(
+                resolution.get("total_detections")
+                or len(resolution.get("member_detections") or [])
+            )
+            candidate.latitude = resolution["latitude"]
+            candidate.longitude = resolution["longitude"]
+            candidate.last_seen = datetime.now(timezone.utc)
         return site_id
 
     @staticmethod

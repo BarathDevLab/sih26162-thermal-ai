@@ -31,6 +31,8 @@ logger = logging.getLogger(__name__)
 # Default bounding box for India: [west, south, east, north]
 DEFAULT_INDIA_BBOX = "67,6,98,38"
 DEFAULT_PRIMARY_SOURCE = "VIIRS_NOAA20_NRT"
+NOAA20_STANDARD_SOURCE = "VIIRS_NOAA20_SP"
+NOAA20_SOURCE_FAMILY = (NOAA20_STANDARD_SOURCE, DEFAULT_PRIMARY_SOURCE)
 DEFAULT_CORROBORATING_SOURCE = "VIIRS_NOAA21_NRT"
 
 AREA_API_BASE_URL = "https://firms.modaps.eosdis.nasa.gov/api/area/csv"

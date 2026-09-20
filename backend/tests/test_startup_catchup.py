@@ -1,5 +1,7 @@
 """Tests for automatic stale-stack catch-up gating."""
 
+from datetime import datetime, timedelta, timezone
+
 from backend.app.services.stack_readiness import StackReadinessReport
 from backend.app.services.startup_catchup import should_start_startup_catchup
 from backend.app.services import startup_catchup
@@ -54,3 +56,32 @@ def test_startup_catchup_exposes_mission_progress(monkeypatch):
     assert status["completed_windows"] == 4
     assert status["total_windows"] == 9
     assert status["updated_at"] is not None
+
+
+def test_startup_catchup_exposes_timing_and_activity(monkeypatch):
+    started_at = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()
+    monkeypatch.setattr(startup_catchup, "_status", {
+        "status": "RUNNING",
+        "running": True,
+        "phase": "SYNCING_FIRMS",
+        "progress_percent": 20,
+        "phase_progress_percent": 10,
+        "started_at": started_at,
+        "ended_at": None,
+        "activity_log": [],
+    })
+
+    startup_catchup._update_catchup_progress({
+        "phase": "SYNCING_FIRMS",
+        "progress_percent": 25,
+        "phase_progress_percent": 20,
+        "detail": "Ingested FIRMS window 2026-09-01 through 2026-09-05.",
+    })
+
+    status = startup_catchup.get_startup_catchup_status()
+    assert status["elapsed_seconds"] >= 59
+    assert status["estimated_remaining_seconds"] is not None
+    assert status["estimated_remaining_seconds"] > 0
+    assert status["progress_rate_percent_per_minute"] is not None
+    assert status["activity_log"][-1]["phase"] == "SYNCING_FIRMS"
+    assert "Ingested FIRMS window" in status["activity_log"][-1]["message"]

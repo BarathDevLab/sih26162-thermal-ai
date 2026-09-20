@@ -18,6 +18,7 @@ from backend.app.db.models import (
     FirmsDetection,
     SiteModelA,
     SiteModelB,
+    SiteModelC,
     SourceSite,
     StackSnapshot,
 )
@@ -26,6 +27,7 @@ from backend.app.services.firms_client import (
     DEFAULT_INDIA_BBOX,
     DEFAULT_PRIMARY_SOURCE,
     FirmsClient,
+    NOAA20_SOURCE_FAMILY,
 )
 from backend.app.services.live_pipeline import LivePipelineService, run_global_daily_model_b_refresh
 from backend.app.services.model_a_service import LAND_COVER_FEATURES, ModelAInputUnavailable
@@ -40,10 +42,6 @@ DEFAULT_CACHE_DIR = str(PROJECT_ROOT / "data" / "cache" / "firms")
 MODEL_STACK_VERSION = os.environ.get("MODEL_STACK_VERSION", "2026-09-04-r1")
 FEATURE_VERSION = "1.0"
 RESOLVER_VERSION = "incremental-member-radius-750m-min3-v1"
-NOAA20_STANDARD_SOURCE = "VIIRS_NOAA20_SP"
-NOAA20_SOURCE_FAMILY = (NOAA20_STANDARD_SOURCE, DEFAULT_PRIMARY_SOURCE)
-
-
 class BackfillOrchestrator:
     """Fetch contiguous FIRMS windows and commit each through LivePipelineService."""
 
@@ -116,17 +114,44 @@ class BackfillOrchestrator:
             self._verify_required_bootstrap_files()
             logger.info("Runtime artifact verification passed.")
 
-        if self.client.offline_mode:
+        # Operational startup is incremental. A published snapshot proves that
+        # every earlier date already passed the contiguous coverage gate, so do
+        # not revisit those dates merely because FIRMS moved them from NRT into
+        # the standard/archive product. Archive reconciliation is an explicit
+        # maintenance operation, not part of normal startup.
+        planning_start = start
+        if update_db:
+            planning_db = self.session_factory()
+            try:
+                self._verify_database_bootstrap(planning_db)
+                baseline = self._latest_runtime_snapshot(planning_db)
+                if baseline is not None:
+                    planning_start = max(
+                        start, baseline.data_through_date + timedelta(days=1)
+                    )
+                    logger.info(
+                        "Published snapshot is current through %s; FIRMS ingestion will begin at %s.",
+                        baseline.data_through_date,
+                        planning_start,
+                    )
+            finally:
+                planning_db.close()
+
+        if planning_start > target:
+            windows = []
+        elif self.client.offline_mode:
             windows = [
                 (source, window_start, day_span)
                 for window_start, day_span in self.generate_5day_windows(
-                    start.isoformat(), target.isoformat()
+                    planning_start.isoformat(), target.isoformat()
                 )
             ]
         else:
             logger.info("Checking NASA FIRMS source availability through %s...", target)
             availability = self.client.check_availability("all")
-            windows = self.build_available_source_windows(start, target, source, availability)
+            windows = self.build_available_source_windows(
+                planning_start, target, source, availability
+            )
         logger.info("Planned %d audited FIRMS windows.", len(windows))
         report_progress(
             phase="PLANNING_WINDOWS",
@@ -141,18 +166,14 @@ class BackfillOrchestrator:
                   "promoted": 0, "alerts": 0}
         degraded_a: Dict[str, str] = {}
         completed_windows: List[Dict[str, Any]] = []
+        promoted_site_ids: set[str] = set()
 
         db: Optional[Session] = self.session_factory() if update_db else None
         try:
             model_refresh_start = start
             if db is not None:
                 self._verify_database_bootstrap(db)
-                baseline = (
-                    db.query(StackSnapshot)
-                    .filter(StackSnapshot.status.in_(("CURRENT", "REBUILDING")))
-                    .order_by(StackSnapshot.data_through_date.desc())
-                    .first()
-                )
+                baseline = self._latest_runtime_snapshot(db)
                 if baseline is not None:
                     model_refresh_start = max(
                         start, baseline.data_through_date + timedelta(days=1)
@@ -171,13 +192,9 @@ class BackfillOrchestrator:
                 window_start_date = datetime.strptime(window_start, "%Y-%m-%d").date()
                 window_end = min(target, window_start_date + timedelta(days=day_span - 1))
                 if db is not None:
-                    completed = db.query(FirmsBackfillWindow).filter_by(
-                        source_sensor=window_source,
-                        bbox=bbox,
-                        window_start=window_start_date,
-                        window_end=window_end,
-                        status="COMPLETED",
-                    ).one_or_none()
+                    completed = self._completed_covering_window(
+                        db, window_source, bbox, window_start_date, window_end
+                    )
                     if completed is not None:
                         logger.info(
                             "[%d/%d] Skipping audited %s window %s..%s.",
@@ -246,6 +263,7 @@ class BackfillOrchestrator:
                     totals["inserted"] += int(window_result.get("inserted_count", 0))
                     totals["revised"] += int(window_result.get("revised_count", 0))
                     totals["promoted"] += int(window_result.get("promoted_count", 0))
+                    promoted_site_ids.update(window_result.get("promoted_site_ids", []))
                     totals["alerts"] += int(window_result.get("alerts_generated", 0))
                     degraded_a.update(window_result.get("model_a_unavailable", {}))
                     self._record_completed_window(
@@ -307,7 +325,12 @@ class BackfillOrchestrator:
                 )
                 logger.info("Refreshing Model A/C for sites changed since %s...", model_refresh_start)
                 degraded_a = self._refresh_2026_stack(
-                    db, model_refresh_start, target, source, progress_callback=report_progress
+                    db,
+                    model_refresh_start,
+                    target,
+                    source,
+                    progress_callback=report_progress,
+                    additional_site_ids=promoted_site_ids,
                 )
                 report_progress(
                     phase="VERIFYING_COVERAGE",
@@ -322,6 +345,7 @@ class BackfillOrchestrator:
                         f"Backfill processed data but Model A lacked authoritative inputs for {len(degraded_a)} "
                         "sites; CURRENT snapshot was not published."
                     )
+                self._verify_model_materialization(db)
                 logger.info("Publishing atomic CURRENT A/B/C snapshot through %s...", target)
                 report_progress(
                     phase="PUBLISHING_SNAPSHOT",
@@ -407,6 +431,37 @@ class BackfillOrchestrator:
             planned.append((window_source, cursor.isoformat(), day_span))
             cursor += timedelta(days=day_span)
         return planned
+
+    @staticmethod
+    def _latest_runtime_snapshot(db: Session) -> Optional[StackSnapshot]:
+        return (
+            db.query(StackSnapshot)
+            .filter(StackSnapshot.status.in_(("CURRENT", "REBUILDING")))
+            .order_by(StackSnapshot.data_through_date.desc())
+            .first()
+        )
+
+    @staticmethod
+    def _completed_covering_window(
+        db: Session,
+        source: str,
+        bbox: str,
+        window_start: date,
+        window_end: date,
+    ) -> Optional[FirmsBackfillWindow]:
+        accepted = NOAA20_SOURCE_FAMILY if source in NOAA20_SOURCE_FAMILY else (source,)
+        return (
+            db.query(FirmsBackfillWindow)
+            .filter(
+                FirmsBackfillWindow.source_sensor.in_(accepted),
+                FirmsBackfillWindow.bbox == bbox,
+                FirmsBackfillWindow.window_start <= window_start,
+                FirmsBackfillWindow.window_end >= window_end,
+                FirmsBackfillWindow.status == "COMPLETED",
+            )
+            .order_by(FirmsBackfillWindow.completed_at.desc())
+            .first()
+        )
 
     @staticmethod
     def _verify_required_bootstrap_files() -> None:
@@ -507,31 +562,41 @@ class BackfillOrchestrator:
         target: date,
         source: str,
         progress_callback: Optional[Callable[..., None]] = None,
+        additional_site_ids: Optional[set[str]] = None,
     ) -> Dict[str, str]:
         """Materialize A/C only for sites changed since the last published cutoff."""
         accepted_sources = NOAA20_SOURCE_FAMILY if source == DEFAULT_PRIMARY_SOURCE else (source,)
-        if refresh_start > target:
+        additional_site_ids = set(additional_site_ids or ())
+        if refresh_start > target and not additional_site_ids:
             logger.info("A/C stack is already materialized through %s.", target)
             return {}
-        touched_sites = (
-            db.query(FirmsDetection.source_site_id.label("site_id"))
-            .filter(
-                FirmsDetection.source_sensor.in_(accepted_sources),
-                FirmsDetection.acq_date >= refresh_start,
-                FirmsDetection.acq_date <= target,
-                FirmsDetection.source_site_id.isnot(None),
+        sites = []
+        if refresh_start <= target:
+            touched_sites = (
+                db.query(FirmsDetection.source_site_id.label("site_id"))
+                .filter(
+                    FirmsDetection.source_sensor.in_(accepted_sources),
+                    FirmsDetection.acq_date >= refresh_start,
+                    FirmsDetection.acq_date <= target,
+                    FirmsDetection.source_site_id.isnot(None),
+                )
+                .distinct()
+                .subquery()
             )
-            .distinct()
-            .subquery()
-        )
-        sites = (
-            db.query(SourceSite)
-            .join(touched_sites, SourceSite.site_id == touched_sites.c.site_id)
-            .all()
-        )
+            sites = (
+                db.query(SourceSite)
+                .join(touched_sites, SourceSite.site_id == touched_sites.c.site_id)
+                .all()
+            )
+        sites_by_id = {site.site_id: site for site in sites}
+        if additional_site_ids:
+            for site in db.query(SourceSite).filter(
+                SourceSite.site_id.in_(additional_site_ids)
+            ).all():
+                sites_by_id.setdefault(site.site_id, site)
+        sites = list(sites_by_id.values())
         site_ids = [site.site_id for site in sites]
         unavailable: Dict[str, str] = {}
-        sites_by_id = {site.site_id: site for site in sites}
         missing_worldcover = {
             site.site_id: (site.latitude, site.longitude)
             for site in sites
@@ -637,6 +702,33 @@ class BackfillOrchestrator:
         db.commit()
         logger.info("Model A/C materialization complete for %d sites.", total_sites)
         return unavailable
+
+    @staticmethod
+    def _verify_model_materialization(db: Session) -> None:
+        missing_a = (
+            db.query(SourceSite.site_id)
+            .outerjoin(SiteModelA, SiteModelA.site_id == SourceSite.site_id)
+            .filter(SiteModelA.site_id.is_(None))
+            .count()
+        )
+        missing_b = (
+            db.query(SourceSite.site_id)
+            .outerjoin(SiteModelB, SiteModelB.site_id == SourceSite.site_id)
+            .filter(SiteModelB.site_id.is_(None))
+            .count()
+        )
+        missing_c = (
+            db.query(SourceSite.site_id)
+            .outerjoin(SiteModelC, SiteModelC.site_id == SourceSite.site_id)
+            .filter(SiteModelC.site_id.is_(None))
+            .count()
+        )
+        if missing_a or missing_b or missing_c:
+            raise RuntimeError(
+                "Model materialization is incomplete: "
+                f"missing A={missing_a}, B={missing_b}, C={missing_c}; "
+                "CURRENT snapshot was not published."
+            )
 
     @staticmethod
     def _publish_snapshot(db: Session, target: date, source: str) -> StackSnapshot:

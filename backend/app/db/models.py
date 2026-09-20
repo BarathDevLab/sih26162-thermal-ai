@@ -129,6 +129,7 @@ class CandidateSourceDetection(Base):
     __table_args__ = (
         PrimaryKeyConstraint("candidate_id", "detection_id"),
         Index("idx_candidate_members_coords", "latitude", "longitude"),
+        Index("idx_candidate_members_detection", "detection_id"),
     )
 
 
