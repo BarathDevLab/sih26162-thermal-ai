@@ -773,6 +773,7 @@ export const MapContainer: React.FC<MapContainerProps> = ({
       pitch: initialIs3DRef.current ? 45 : 0,
       bearing: initialIs3DRef.current ? -12 : 0,
       maxPitch: 85,
+      maxZoom: 17,
       attributionControl: false,
       renderWorldCopies: initialIs3DRef.current ? true : false
     });
