@@ -24,7 +24,8 @@ import {
   fetchAlerts,
   fetchLiveStatus,
   fetchReplaySnapshot,
-  subscribeToAlertStream
+  subscribeToAlertStream,
+  subscribeToStartupRuntime
 } from './services/api';
 
 const MapContainer = lazy(() => import('./components/MapContainer').then(module => ({
@@ -157,6 +158,11 @@ export default function App() {
     return counts;
   }, [sitesData]);
 
+  const startupRuntimeBlocking = Boolean(liveRuntime?.startup_catchup.running) || Boolean(
+    health?.status === 'STALE_BACKFILL'
+    && liveRuntime?.startup_catchup.status === 'COMPLETED'
+  );
+
   // 1. Initial runtime handshake. Uvicorn may still be completing its lifespan
   // startup while Vite is already serving the shell, so a proxy 502 is a
   // transient "not ready" signal rather than a completed bootstrap.
@@ -183,15 +189,20 @@ export default function App() {
         const h = await fetchHealth();
         if (!active) return;
         setStartupConnectionDetail('Backend socket established. Loading runtime telemetry.');
-        const [s, a, runtime] = await Promise.all([
-          fetchStats(),
-          fetchAlerts(),
-          fetchLiveStatus()
-        ]);
+        const runtime = await fetchLiveStatus();
         if (!active) return;
+        const catchupRunning = runtime.startup_catchup.running;
+        let s: SystemStats | null = null;
+        let initialAlerts: AlertItem[] = [];
+        if (!catchupRunning) {
+          const [nextStats, alertResponse] = await Promise.all([fetchStats(), fetchAlerts()]);
+          if (!active) return;
+          s = nextStats;
+          initialAlerts = alertResponse.alerts;
+        }
         setHealth(h);
-        setStats(s);
-        setAlerts(a.alerts);
+        if (s) setStats(s);
+        setAlerts(initialAlerts);
         setLiveRuntime(runtime);
         setTelemetryReady(true);
         setBootstrapSettled(true);
@@ -199,7 +210,7 @@ export default function App() {
         setStartupConnectionDetail('Backend runtime established. Loading the operational picture.');
         const liveReady = h.status === 'READY' || h.status === 'DEGRADED_PRITHVI_UNAVAILABLE';
         setMode(liveReady ? 'LIVE' : 'REPLAY');
-        if (!liveReady && s.latest_firms_date) {
+        if (!liveReady && s?.latest_firms_date) {
           setReplayDate(s.latest_firms_date);
         }
       } catch (err) {
@@ -224,41 +235,75 @@ export default function App() {
     };
   }, []);
 
-  // A stale backend catches up in the background. Poll readiness so the UI
-  // enables Live automatically when the new common snapshot is published.
+  // A stale backend catches up in the background. One SSE connection carries
+  // progress, activity, timing, and readiness until the stack becomes live.
   const readinessStatus = health?.status;
   useEffect(() => {
     const liveReady = readinessStatus === 'READY' || readinessStatus === 'DEGRADED_PRITHVI_UNAVAILABLE';
     if (!readinessStatus || liveReady) return;
 
     let active = true;
-    const refreshReadiness = async () => {
+    let finalizing = false;
+    let unsubscribe = () => {};
+
+    const finalizeLiveActivation = async () => {
       try {
-        const [nextHealth, nextRuntime] = await Promise.all([
+        const [nextHealth, nextStats, nextAlerts] = await Promise.all([
           fetchHealth(),
-          fetchLiveStatus()
+          fetchStats(),
+          fetchAlerts()
         ]);
         if (!active) return;
         setHealth(nextHealth);
-        setLiveRuntime(nextRuntime);
-        const nextLiveReady = nextHealth.status === 'READY' || nextHealth.status === 'DEGRADED_PRITHVI_UNAVAILABLE';
-        if (nextLiveReady) {
-          const nextStats = await fetchStats();
-          if (!active) return;
-          setStats(nextStats);
-          setMode('LIVE');
-        }
+        setStats(nextStats);
+        setAlerts(nextAlerts.alerts);
+        setMode('LIVE');
       } catch (err) {
-        console.error('Readiness refresh failed:', err);
+        finalizing = false;
+        console.error('Final live activation refresh failed:', err);
       }
     };
 
-    void refreshReadiness();
-    const interval = window.setInterval(() => void refreshReadiness(), 2_000);
+    unsubscribe = subscribeToStartupRuntime(
+      (update) => {
+        if (!active) return;
+        setLiveRuntime((current) => current ? {
+          ...current,
+          startup_catchup: update.startup_catchup,
+          runtime_readiness: update.runtime_readiness
+        } : current);
+        const readiness = update.runtime_readiness;
+        setHealth((current) => current ? { ...current, status: readiness.status } : current);
+
+        const nextLiveReady = readiness.can_start_live
+          || readiness.status === 'READY'
+          || readiness.status === 'DEGRADED_PRITHVI_UNAVAILABLE';
+        if (nextLiveReady && !finalizing) {
+          finalizing = true;
+          setMode('LIVE');
+          unsubscribe();
+          void finalizeLiveActivation();
+          return;
+        }
+
+        const catchup = update.startup_catchup;
+        if (
+          ['FAILED', 'COMPLETED_NOT_READY', 'SKIPPED_ALREADY_RUNNING'].includes(catchup.status)
+          || (catchup.status === 'IDLE' && !catchup.running)
+        ) {
+          unsubscribe();
+        }
+      },
+      (connected) => setStartupConnectionDetail(
+        connected
+          ? 'Receiving live backend startup telemetry.'
+          : 'Startup telemetry link interrupted; reconnecting automatically.'
+      )
+    );
 
     return () => {
       active = false;
-      window.clearInterval(interval);
+      unsubscribe();
     };
   }, [readinessStatus]);
 
@@ -288,7 +333,7 @@ export default function App() {
 
   // 3. Load Sites based on BBox and Operating Mode
   const loadSites = useCallback(async () => {
-    if (!currentBBox || !telemetryReady || !bootstrapSettled) return;
+    if (!currentBBox || !telemetryReady || !bootstrapSettled || startupRuntimeBlocking) return;
 
     const requestId = ++sitesRequestId.current;
     const limit = viewportLimit(currentBBox);
@@ -376,16 +421,24 @@ export default function App() {
         }
       }
     }
-  }, [bootstrapSettled, currentBBox, initialSitesRendered, mode, replayDate, telemetryReady]);
+  }, [
+    bootstrapSettled,
+    currentBBox,
+    initialSitesRendered,
+    mode,
+    replayDate,
+    startupRuntimeBlocking,
+    telemetryReady
+  ]);
 
   useEffect(() => {
-    if (!currentBBox || !telemetryReady || !bootstrapSettled) return;
+    if (!currentBBox || !telemetryReady || !bootstrapSettled || startupRuntimeBlocking) return;
     const task = window.setTimeout(() => void loadSites(), VIEWPORT_REQUEST_DEBOUNCE_MS);
     return () => {
       window.clearTimeout(task);
       sitesAbortController.current?.abort();
     };
-  }, [bootstrapSettled, currentBBox, loadSites, telemetryReady]);
+  }, [bootstrapSettled, currentBBox, loadSites, startupRuntimeBlocking, telemetryReady]);
 
   // The first viewport is part of startup. Keep retrying it behind the mission
   // screen instead of revealing a half-initialized interface after one error.
@@ -394,6 +447,7 @@ export default function App() {
       !currentBBox
       || !telemetryReady
       || !bootstrapSettled
+      || startupRuntimeBlocking
       || initialSitesRendered
       || !sitesError
     ) return;
@@ -404,7 +458,15 @@ export default function App() {
     );
     const task = window.setTimeout(() => void loadSites(), retryDelay);
     return () => window.clearTimeout(task);
-  }, [bootstrapSettled, currentBBox, initialSitesRendered, loadSites, sitesError, telemetryReady]);
+  }, [
+    bootstrapSettled,
+    currentBBox,
+    initialSitesRendered,
+    loadSites,
+    sitesError,
+    startupRuntimeBlocking,
+    telemetryReady
+  ]);
 
   const refreshSelectedSite = useCallback(async (siteId: string, asOfDate?: string) => {
     const requestId = ++selectedSiteRequestId.current;
@@ -450,16 +512,12 @@ export default function App() {
     setAlerts(prev => prev.filter(a => a.alert_id !== alertId));
   };
 
-  const startupCatchupBlocking = Boolean(liveRuntime?.startup_catchup.running) || Boolean(
-    health?.status === 'STALE_BACKFILL'
-    && liveRuntime?.startup_catchup.status === 'COMPLETED'
-  );
   const startupPrerequisitesReady = telemetryReady
     && bootstrapSettled
     && mapReady
     && initialSitesRendered
     && !sitesError
-    && !startupCatchupBlocking;
+    && !startupRuntimeBlocking;
 
   // Startup is a one-way handoff. Once activated, ordinary runtime errors are
   // handled inside the command center and never resurrect the boot overlay.

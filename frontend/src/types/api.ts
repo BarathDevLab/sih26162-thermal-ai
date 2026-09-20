@@ -40,14 +40,37 @@ export interface StartupCatchupStatus {
   started_at: string | null;
   ended_at: string | null;
   updated_at: string | null;
+  elapsed_seconds: number;
+  estimated_remaining_seconds: number | null;
+  estimated_completion_at: string | null;
+  progress_rate_percent_per_minute: number | null;
+  activity_log: StartupActivityEvent[];
   detail: string;
+}
+
+export interface StartupActivityEvent {
+  timestamp: string;
+  phase: string;
+  level: 'INFO' | 'WARNING' | 'ERROR';
+  message: string;
 }
 
 export interface LiveRuntimeStatus {
   scheduler: Record<string, unknown>;
   prithvi_queue: Record<string, unknown>;
   startup_catchup: StartupCatchupStatus;
+  runtime_readiness: {
+    status: HealthCheck['status'];
+    can_start_live: boolean;
+    data_through_date?: string | null;
+    detail: string;
+  };
 }
+
+export type StartupRuntimeUpdate = Pick<
+  LiveRuntimeStatus,
+  'startup_catchup' | 'runtime_readiness'
+>;
 
 export interface SystemStats {
   total_sites: number;

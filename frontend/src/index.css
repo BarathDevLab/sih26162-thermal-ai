@@ -1131,6 +1131,104 @@ input[type="range"].tactical-slider::-moz-range-thumb {
 
 .mission-stage-rail > div.is-ready em { color: #5cbdc5; }
 
+.mission-activity-log {
+  position: absolute;
+  top: 47%;
+  left: clamp(50px, 5vw, 76px);
+  z-index: 10;
+  width: min(310px, 24vw);
+  overflow: hidden;
+  color: #78919a;
+  font-size: clamp(6px, 0.66vw, 9px);
+  background: linear-gradient(90deg, rgba(4, 15, 21, 0.9), rgba(5, 17, 23, 0.48));
+  border-left: 1px solid rgba(54, 202, 217, 0.42);
+  backdrop-filter: blur(6px);
+  transform: translateY(-50%);
+}
+
+.mission-activity-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 9px;
+  color: #aec5ca;
+  letter-spacing: 0.14em;
+  border-bottom: 1px solid rgba(79, 157, 173, 0.28);
+}
+
+.mission-activity-heading b {
+  color: #55d9b0;
+  font-size: 0.9em;
+  font-weight: 500;
+  text-shadow: 0 0 8px rgba(63, 221, 177, 0.35);
+}
+
+.mission-activity-timing {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 8px;
+  padding: 7px 9px;
+  color: #526d75;
+  letter-spacing: 0.08em;
+  border-bottom: 1px solid rgba(79, 157, 173, 0.18);
+}
+
+.mission-activity-timing span:last-child:nth-child(3) {
+  grid-column: 1 / -1;
+}
+
+.mission-activity-timing b {
+  display: block;
+  margin-top: 2px;
+  color: #67d9e3;
+  font-weight: 500;
+}
+
+.mission-activity-events {
+  display: flex;
+  max-height: min(34vh, 275px);
+  overflow: hidden;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.mission-activity-events > div {
+  display: grid;
+  grid-template-columns: 50px minmax(0, 1fr);
+  gap: 2px 7px;
+  padding: 6px 9px;
+  border-bottom: 1px solid rgba(72, 123, 134, 0.13);
+}
+
+.mission-activity-events time {
+  color: #42616a;
+  font-variant-numeric: tabular-nums;
+}
+
+.mission-activity-events span {
+  overflow: hidden;
+  color: #ff8b64;
+  letter-spacing: 0.08em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mission-activity-events p {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  margin: 0;
+  color: #8da4aa;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mission-activity-events .is-warning span,
+.mission-activity-events .is-warning p { color: #f4bb61; }
+
+.mission-activity-events .is-error span,
+.mission-activity-events .is-error p { color: #ff7078; }
+
 .mission-loader-footer {
   position: absolute;
   right: clamp(52px, 6vw, 90px);
@@ -1278,7 +1376,8 @@ input[type="range"].tactical-slider::-moz-range-thumb {
     width: min(112vw, 82vh);
   }
 
-  .mission-stage-rail {
+  .mission-stage-rail,
+  .mission-activity-log {
     display: none;
   }
 

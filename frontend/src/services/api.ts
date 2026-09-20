@@ -6,6 +6,7 @@
 import type {
   HealthCheck,
   LiveRuntimeStatus,
+  StartupRuntimeUpdate,
   SystemStats,
   SiteGeoJSONFeatureCollection,
   SiteDetail,
@@ -52,6 +53,23 @@ export async function fetchStats(): Promise<SystemStats> {
 export async function fetchLiveStatus(): Promise<LiveRuntimeStatus> {
   const res = await fetch(`${API_BASE}/live/status`, { cache: 'no-store' });
   return handleResponse<LiveRuntimeStatus>(res);
+}
+
+export function subscribeToStartupRuntime(
+  onUpdate: (update: StartupRuntimeUpdate) => void,
+  onConnectionChange?: (connected: boolean) => void
+): () => void {
+  const source = new EventSource(`${API_BASE}/live/startup-stream`);
+  source.onopen = () => onConnectionChange?.(true);
+  source.onmessage = (event) => {
+    try {
+      onUpdate(JSON.parse(event.data) as StartupRuntimeUpdate);
+    } catch (error) {
+      console.error('Invalid startup telemetry event:', error);
+    }
+  };
+  source.onerror = () => onConnectionChange?.(false);
+  return () => source.close();
 }
 
 export interface BBoxSiteFilters {
